@@ -40,8 +40,8 @@ class FaceLandmarkerCamera:
         
         # 预处理：加载模型差异和标准模型顶点，初始化实时变形参数
         try:
-            # 直接加载自定义模型顶点
-            self.custom_vertices = self.load_obj_vertices(os.path.join('obj', 'Andy_Wah_facemesh.obj'))
+            # 直接加载自定义模型顶点 - 修改路径为相对于fml目录的正确路径
+            self.custom_vertices = self.load_obj_vertices(os.path.join('..', 'obj', 'Andy_Wah_facemesh.obj'))
             print("已加载自定义模型顶点")
         except Exception as e:
             print(f"自定义模型加载失败: {e}")
@@ -51,7 +51,7 @@ class FaceLandmarkerCamera:
         self.N = 60
         self.warp_ready = False
         self.diff_transformed = None
-        self.transform_file = os.path.join("auto_gen", "npy", "face_transform.npy")  # 保存变换参数的文件
+        self.transform_file = os.path.join("..", "auto_gen", "npy", "face_transform.npy")  # 保存变换参数的文件
         
         # 加载中文字体用于GUI显示
         self.chinese_font = self.load_chinese_font()
@@ -83,21 +83,7 @@ class FaceLandmarkerCamera:
         self.perspective_depth_variation = 55.0  # 深度变化范围（厘米）- 控制透视强度，正值=常规透视，负值=反向透视
         self.perspective_intensity = 1.0 # 在新模型中，此参数不再直接控制透视强度，可用于后续可能的畸变调整
         
-        # 【新增】上下透视增强参数 (根据@修改透视，设为0.0以实现纯净针孔模型)
-        self.vertical_perspective_strength = 0.0  # 上下透视强度（设为0以关闭额外增强）
-        self.vertical_perspective_center = 0.5  # 上下透视中心位置
-        
-        # 【新增】左右透视增强参数 (根据@修改透视，设为0.0以实现纯净针孔模型)
-        self.horizontal_perspective_strength = 0.0  # 左右透视强度（设为0以关闭额外增强）
-        self.horizontal_perspective_center = 0.5  # 左右透视中心位置
-        
-        # 【新增】面部整体平移控制
-        self.face_offset_x = 0.0  # 面部X方向偏移（归一化坐标，-1.0到1.0）
-        self.face_offset_y = 0.0  # 面部Y方向偏移（归一化坐标，-1.0到1.0）
-        
-        # 【新增】透视中心偏移控制
-        self.perspective_center_offset_x = 0.0  # 透视中心X偏移（像素）
-        self.perspective_center_offset_y = 0.0  # 透视中心Y偏移（像素）
+
         
         # 显示控制
         self.show_landmarks = True  # 控制是否显示landmarks点和连线
@@ -106,26 +92,19 @@ class FaceLandmarkerCamera:
         self.landmarks_scale = 1.0  # landmarks缩放系数
         self.scale_step = 0.05      # 每次调整的步长
         
-        # landmarks宽度比例调整
-        self.width_scale = 1.0      # landmarks宽度缩放系数（高度保持不变）
-        self.width_scale_step = 0.05 # 宽度调整步长
-        
-        # 边缘模糊控制
-        self.enable_edge_blur = False  # 是否启用边缘滤波
-        
-        # 线框显示控制
-        self.enable_wireframe = True   # 是否启用黑色线框显示
-        self.wireframe_thickness = 0.2  # 线框粗细（支持亚像素级，如0.2）
-        
-        # Lambert材质控制
-        self.enable_lambert_material = True  # 是否使用Lambert材质渲染
-        
-        # 面部专用模式控制
-        self.enable_face_only_mode = False  # 是否只显示面部，背景纯黑
-        
-        # 视频保存控制
+        # 已删除功能的兼容性属性（设为默认值）
+        self.enable_edge_blur = False
+        self.enable_wireframe = False
+        self.enable_lambert_material = False
+        self.enable_face_only_mode = False
+        self.wireframe_thickness = 1.0
+        self.face_offset_x = 0.0
+        self.face_offset_y = 0.0
+        self.perspective_center_offset_x = 0.0
+        self.perspective_center_offset_y = 0.0
         self.save_output_video = False
-        self.output_video_writer = None
+        
+
         
         # FPS统计
         self.fps_counter = 0
@@ -138,8 +117,8 @@ class FaceLandmarkerCamera:
         
         # 【关键修改】加载真实相机校准参数
         self.use_real_calibration = True  # 是否使用真实校准参数
-        self.calibration_intrinsic_path = "Camera-Calibration/output/intrinsic.txt"  # 内参文件路径
-        self.calibration_extrinsic_path = "Camera-Calibration/output/extrinsic.txt"  # 外参文件路径
+        self.calibration_intrinsic_path = os.path.join("..", "Camera-Calibration", "output", "intrinsic.txt")  # 内参文件路径
+        self.calibration_extrinsic_path = os.path.join("..", "Camera-Calibration", "output", "extrinsic.txt")  # 外参文件路径
         
         # 相机参数（将根据真实校准或手动设置）
         self.camera_fx = None
@@ -153,35 +132,19 @@ class FaceLandmarkerCamera:
         
         print("人脸标志检测器初始化完成")
         print("按 'Q' 键退出程序")
-        print("按 'S' 键保存当前帧")
         print("按 'L' 键保存当前landmarks到CSV文件")
         print("按 'M' 键重新检测前60帧并计算变换")
         print("按 'X' 键切换原始/变形landmarks显示")
         print("按 'P' 键切换像素级人脸变形显示")
         print("按 'H' 键隐藏/显示landmarks线框")
         print("按 '[' 键缩小landmarks，']' 键放大landmarks")
-        print("按 '3' 键减小宽度比例，'4' 键增大宽度比例")
-        print("按 'B' 键切换边缘滤波效果")
-        print("按 'W' 键切换黑色线框显示")
-        print("按 '-' 键减细线框，'+' 键增粗线框")
-        print("按 'G' 键切换纹理模式 (原始纹理/Lambert材质)")
-        print("按 'O' 键切换面部专用模式 (只显示面部，背景纯黑)")
-        print("按 'R' 键开始/停止录制输出视频")
-        print("按 'T' 键切换透视投影/弱透视投影")
-        print("按 '1/2' 键调整透视强度 (模拟不同焦距)")
-        print("按 '5/6' 键调整基础深度 (距离远近)")
-        print("按 '7/8' 键调整深度变化范围 (立体感强弱)")
-        print("按 '9/0' 键调整上下透视强度")
-        print("按 '/*' 键调整左右透视强度")
-        print("按 'A/D' 键左右移动面部，'Z/C' 键上下移动面部")
-        print("按 'J/L' 键调节透视中心X偏移，'I/K' 键调节透视中心Y偏移")
         print("按 'ESC' 键或 'Q' 键退出程序")
         print(f"相机校准: {'使用真实校准' if self.use_real_calibration else '使用手动估计'}")
 
     def download_model(self):
         """下载人脸标志检测模型"""
         model_url = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
-        model_path = "fml/face_landmarker.task"
+        model_path = "face_landmarker.task"  # 修改为当前目录下的文件
         
         if not os.path.exists(model_path):
             print("正在下载人脸标志检测模型...")
@@ -297,12 +260,7 @@ class FaceLandmarkerCamera:
                             # 以中心点为基准进行缩放
                             warped_coords = center + (warped_coords - center) * self.landmarks_scale
                         
-                        # 应用宽度比例调整（只调整X坐标，保持Y坐标不变）
-                        if self.width_scale != 1.0:
-                            # 计算人脸中心的X坐标（使用所有landmarks的X坐标平均值）
-                            face_center_x = np.mean(warped_coords[:, 0])
-                            # 以人脸中心X坐标为基准，只调整X坐标
-                            warped_coords[:, 0] = face_center_x + (warped_coords[:, 0] - face_center_x) * self.width_scale
+
                         
                         # 在landmarks渲染阶段应用透视变换
                         if self.enable_perspective_projection and self.enable_landmarks_perspective:
@@ -313,12 +271,6 @@ class FaceLandmarkerCamera:
                         
                         coords = display_coords
                     else:
-                        # 原始landmarks模式，也应用宽度比例调整
-                        if self.width_scale != 1.0:
-                            # 计算人脸中心的X坐标（使用所有landmarks的X坐标平均值）
-                            face_center_x = np.mean(coords[:, 0])
-                            # 以人脸中心X坐标为基准，只调整X坐标
-                            coords[:, 0] = face_center_x + (coords[:, 0] - face_center_x) * self.width_scale
                         
                         # 即使在原始模式下，也可以应用透视效果
                         if self.enable_perspective_projection and self.enable_landmarks_perspective and not self.show_warped:
@@ -513,12 +465,7 @@ class FaceLandmarkerCamera:
                 # 以中心点为基准进行缩放
                 warped_coords = center + (warped_coords - center) * self.landmarks_scale
             
-            # 应用宽度比例调整（只调整X坐标，保持Y坐标不变）
-            if self.width_scale != 1.0:
-                # 计算人脸中心的X坐标（使用所有landmarks的X坐标平均值）
-                face_center_x = np.mean(warped_coords[:, 0])
-                # 以人脸中心X坐标为基准，只调整X坐标
-                warped_coords[:, 0] = face_center_x + (warped_coords[:, 0] - face_center_x) * self.width_scale
+
             
             # 应用透视投影变形
             if self.enable_perspective_projection:
@@ -567,7 +514,7 @@ class FaceLandmarkerCamera:
             filename = f'face_landmarks_{int(time.time())}.csv'
         
         # 确保文件保存在 auto_gen/csv_files 文件夹中
-        csv_dir = os.path.join("auto_gen", "csv_files")
+        csv_dir = os.path.join("..", "auto_gen", "csv_files")
         if not os.path.exists(csv_dir):
             os.makedirs(csv_dir)
         filepath = os.path.join(csv_dir, filename)
@@ -726,17 +673,7 @@ class FaceLandmarkerCamera:
             image = self.put_chinese_text(image, scale_text, 
                                         (10, y_pos), font_size=18, color=(255, 255, 0))
         
-        # 显示宽度比例状态（所有模式下都显示）
-        width_text = f'宽度比例: {self.width_scale:.2f}x (按3/4调整)'
-        if self.warp_ready and self.show_warped:
-            if self.enable_pixel_warp:
-                y_pos = height - 260
-            else:
-                y_pos = height - 220
-        else:
-            y_pos = height - 140
-        image = self.put_chinese_text(image, width_text, 
-                                    (10, y_pos), font_size=18, color=(255, 192, 255))
+        # 宽度比例功能已删除，不再显示
         
         # 显示变形状态
         if self.warp_ready:
@@ -904,295 +841,176 @@ class FaceLandmarkerCamera:
         
         print("按键控制:")
         print("  'Q' 或 ESC - 退出")
-        print("  'S' - 保存当前帧")
-        print("  'R' - 开始/停止录制输出视频")
         print("  'M' - 重新检测并计算变换")
         print("  'X' - 切换原始/变形显示")
         print("  'P' - 切换像素级变形")
-        print("  'E' - 导出变形后的人脸模型为OBJ文件")
         print("  'H' - 隐藏/显示landmarks线框")
         print("  '[' 键缩小landmarks，']' 键放大landmarks")
-        print("  '3' 键减小宽度比例，'4' 键增大宽度比例")
-        print("  'B' 键切换边缘滤波效果")
-        print("  'W' 键切换黑色线框显示")
-        print("  '-' 键减细线框，'+' 键增粗线框")
-        print("  'G' 键切换纹理模式 (原始纹理/Lambert材质)")
-        print("  'O' 键切换面部专用模式 (只显示面部，背景纯黑)")
-        print("  'R' - 开始/停止录制输出视频")
-        print("  'T' 键切换透视投影/弱透视投影")
-        print("  'Y' 键切换landmarks渲染的透视效果")
-        print("  '1/2' 键调整透视强度 (模拟不同焦距)")
-        print("  '5/6' 键调整基础深度 (距离远近)")
-        print("  '7/8' 键调整深度变化范围 (立体感强弱)")
-        print("  '9/0' 键调整上下透视强度")
-        print("  '/*' 键调整左右透视强度")
-        print("  'A/D' 键左右移动面部，'Z/C' 键上下移动面部")
-        print("  'J/L' 键调节透视中心X偏移，'I/K' 键调节透视中心Y偏移")
         print("  'ESC' 键或 'Q' 键退出程序")
         
         try:
             while True:
-                ret, frame = cap.read()
-                if not ret:
-                    print("错误：无法从摄像头读取图像")
-                    break
-                frame = cv2.flip(frame, 1)  # 左右翻转（镜像）
-                
-                frame_count += 1
-                
-                # 转换为RGB格式
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                
-                # 创建MediaPipe图像对象
-                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-                
-                # 计算时间戳（基于帧数和帧率）
-                frame_timestamp_ms = int((frame_count / 30.0) * 1000)  # 假设30FPS
-                
-                # 进行检测
-                detection_result = self.landmarker.detect_for_video(mp_image, frame_timestamp_ms)
-                
-                # 处理检测结果（用于变形功能）
-                if detection_result.face_landmarks and not self.warp_ready:
-                    # 仅使用第一个检测到的人脸
-                    landmarks = detection_result.face_landmarks[0]
-                    # 只使用前468个landmarks，避免478 vs 468的维度不匹配问题
-                    coords = np.array([[lm.x, lm.y, lm.z] for lm in landmarks[:468]], dtype=np.float32)
-                    self.landmark_buffer.append(coords)
-                    self.frame_count += 1
+                try: # Inner try for frame processing and key handling
+                    ret, frame = cap.read()
+                    if not ret:
+                        print("错误：无法从摄像头读取图像")
+                        break
+                    frame = cv2.flip(frame, 1)  # 左右翻转（镜像）
                     
-                    if self.frame_count >= self.N:
-                        print("开始计算相似变换...")
-                        avg_landmarks = np.mean(self.landmark_buffer, axis=0)
-                        self.estimate_transform(avg_landmarks)
-                        self.landmark_buffer = []
-                
-                # 绘制标志点
-                annotated_image = self.draw_landmarks_on_image(rgb_frame, detection_result)
-                
-                # 转换回BGR格式用于显示
-                annotated_frame = cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR)
-                
-                # 更新FPS
-                self.update_fps()
-                
-                # 绘制信息
-                display_frame = self.draw_info_on_image(annotated_frame, detection_result)
-                
-                # 保存到输出视频（如果启用）
-                if self.save_output_video and self.output_video_writer:
-                    self.output_video_writer.write(display_frame)
-                
-                # 显示帧
-                cv2.imshow('MediaPipe 人脸标志检测 - 摄像头实时', display_frame)
-                
-                # 处理按键
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q') or key == 27:  # 'q' 或 ESC 键退出
-                    break
-                elif key == ord('s'):  # 's' 键保存图像
-                    save_name = f'camera_frame_{frame_count}_{int(time.time())}.jpg'
+                    frame_count += 1
                     
-                    # 确保图像目录存在
-                    images_dir = os.path.join("auto_gen", "images")
-                    if not os.path.exists(images_dir):
-                        os.makedirs(images_dir)
-                    save_path = os.path.join(images_dir, save_name)
+                    # 转换为RGB格式
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     
-                    cv2.imwrite(save_path, display_frame)
-                    print(f"图像已保存: {save_path}")
-                elif key == ord('l'):  # 'l' 键保存landmarks
-                    if detection_result.face_landmarks:
-                        csv_filename = f'camera_landmarks_{frame_count}_{int(time.time())}.csv'
-                        if self.save_landmarks_to_csv(detection_result.face_landmarks, csv_filename):
-                            print(f"Landmarks已保存到: {csv_filename}")
-                        else:
-                            print("保存landmarks失败")
-                    else:
-                        print("没有可用的landmarks数据")
-                elif key == ord('M') or key == ord('m'):  # 'M' 或 'm' 键重新检测前60帧并计算变换
-                    self.reset_transform()
-                    print("开始重新检测前60帧...")
-                elif key == ord('X') or key == ord('x'):  # 'X' 或 'x' 键切换显示模式
-                    if self.warp_ready:
-                        self.show_warped = not self.show_warped
-                        if self.show_warped:
-                            print("切换到变形landmarks显示")
-                        else:
-                            print("切换到原始landmarks显示")
-                    else:
-                        print("变形功能未启用，请先按M键进行检测")
-                elif key == ord('P') or key == ord('p'):  # 'P' 或 'p' 键切换像素变形
-                    if self.warp_ready and self.show_warped:
-                        self.enable_pixel_warp = not self.enable_pixel_warp
-                        if self.enable_pixel_warp:
-                            print("像素级人脸变形已启用")
-                            # 重置平滑处理的缓存
-                            self.previous_landmarks = None
-                        else:
-                            print("像素级人脸变形已关闭")
-                    else:
-                        print("请先启用变形功能（按M键检测，按X键切换到变形显示）")
-                elif key == ord('E') or key == ord('e'):  # 'E' 或 'e' 键导出变形后的landmarks为OBJ文件
-                    if self.warp_ready and self.diff_transformed is not None and detection_result and detection_result.face_landmarks:
-                        # 获取当前帧的landmarks
-                        current_landmarks = np.array([[lm.x, lm.y, lm.z] for lm in detection_result.face_landmarks[0][:468]], dtype=np.float32)
+                    # 创建MediaPipe图像对象
+                    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+                    
+                    # 计算时间戳（基于帧数和帧率）
+                    frame_timestamp_ms = int((frame_count / 30.0) * 1000)  # 假设30FPS
+                    
+                    # 进行检测
+                    detection_result = self.landmarker.detect_for_video(mp_image, frame_timestamp_ms)
+                    
+                    # 处理检测结果（用于变形功能）
+                    if detection_result.face_landmarks and not self.warp_ready:
+                        # 仅使用第一个检测到的人脸
+                        landmarks = detection_result.face_landmarks[0]
+                        # 只使用前468个landmarks，避免478 vs 468的维度不匹配问题
+                        coords = np.array([[lm.x, lm.y, lm.z] for lm in landmarks[:468]], dtype=np.float32)
+                        self.landmark_buffer.append(coords)
+                        self.frame_count += 1
+                        print(f"收集第 {self.frame_count}/{self.N} 帧 landmarks (使用前468个点)")
                         
-                        # 修正x坐标（与实时变形保持一致）
-                        corrected_coords = current_landmarks.copy()
-                        corrected_coords[:, 0] *= self.x_scale_factor
-                        
-                        # 应用形状差异变换
-                        warped_coords = corrected_coords + self.diff_transformed
-                        
-                        # 还原x坐标到16:9坐标系
-                        warped_coords[:, 0] /= self.x_scale_factor
-                        
-                        # 导出为OBJ文件
-                        exported_file = self.export_warped_landmarks_to_obj(warped_coords)
-                        if exported_file:
-                            print(f"✅ 变形后的人脸模型已导出: {exported_file}")
+                        if self.frame_count >= self.N:
+                            print("开始计算相似变换...")
+                            avg_landmarks = np.mean(self.landmark_buffer, axis=0)
+                            self.estimate_transform(avg_landmarks)
+                            self.landmark_buffer = []
+                    
+                    # 绘制标志点
+                    annotated_image = self.draw_landmarks_on_image(rgb_frame, detection_result)
+                    
+                    # 转换回BGR格式用于显示
+                    annotated_frame = cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR)
+                    
+                    # 更新FPS
+                    self.update_fps()
+                    
+                    # 绘制信息
+                    display_frame = self.draw_info_on_image(annotated_frame, detection_result)
+                    
+                    # 保存到输出视频（如果启用）
+                    if hasattr(self, 'save_output_video') and self.save_output_video and hasattr(self, 'output_video_writer') and self.output_video_writer:
+                        self.output_video_writer.write(display_frame)
+                    
+                    # 显示帧
+                    cv2.imshow('MediaPipe 人脸标志检测 - 摄像头实时', display_frame)
+                    
+                    # 处理按键
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q') or key == 27:  # 'q' 或 ESC 键退出
+                        break
+                    elif key == ord('s'):  # 's' 键保存图像
+                        result_dir = os.path.join("..", "auto_gen", "result_file")
+                        if not os.path.exists(result_dir):
+                            os.makedirs(result_dir)
+                        save_name = f'camera_frame_{frame_count}_{int(time.time())}.jpg'
+                        save_path = os.path.join(result_dir, save_name)
+                        cv2.imwrite(save_path, display_frame)
+                        print(f"图像已保存: {save_path}")
+                    elif key == ord('l'):  # 'l' 键保存landmarks
+                        if detection_result.face_landmarks:
+                            csv_filename = f'camera_landmarks_{frame_count}_{int(time.time())}.csv'
+                            if self.save_landmarks_to_csv(detection_result.face_landmarks, csv_filename):
+                                print(f"Landmarks已保存到: {csv_filename}")
+                            else:
+                                print("保存landmarks失败")
                         else:
-                            print("❌ 导出变形后的人脸模型失败")
-                    else:
-                        if not self.warp_ready:
-                            print("⚠️ 还未进行M键对齐，无法导出变形模型")
-                        elif detection_result is None or not detection_result.face_landmarks:
-                            print("⚠️ 当前帧未检测到人脸，无法导出")
+                            print("没有可用的landmarks数据")
+                    elif key == ord('M') or key == ord('m'):  # 'M' 或 'm' 键重新检测前60帧并计算变换
+                        self.reset_transform()
+                        print("开始重新检测前60帧...")
+                    elif key == ord('X') or key == ord('x'):  # 'X' 或 'x' 键切换显示模式
+                        if self.warp_ready:
+                            self.show_warped = not self.show_warped
+                            if self.show_warped:
+                                print("切换到变形landmarks显示")
+                            else:
+                                print("切换到原始landmarks显示")
                         else:
-                            print("⚠️ 变形功能未就绪，无法导出")
-                elif key == ord('H') or key == ord('h'):  # 'H' 或 'h' 键切换landmarks显示
-                    self.show_landmarks = not self.show_landmarks
-                    if self.show_landmarks:
-                        print("landmarks线框显示已开启")
-                    else:
-                        print("landmarks线框显示已隐藏")
-                elif key == ord('['):  # '[' 键缩小landmarks
-                    if self.warp_ready and self.show_warped:
-                        self.landmarks_scale = max(0.1, self.landmarks_scale - self.scale_step)
-                        print(f"landmarks缩放调整为: {self.landmarks_scale:.2f}x")
-                    else:
-                        print("请先启用变形功能")
-                elif key == ord(']'):  # ']' 键放大landmarks
-                    if self.warp_ready and self.show_warped:
-                        self.landmarks_scale = min(3.0, self.landmarks_scale + self.scale_step)
-                        print(f"landmarks缩放调整为: {self.landmarks_scale:.2f}x")
-                    else:
-                        print("请先启用变形功能")
-                elif key == ord('B') or key == ord('b'):  # 'B' 或 'b' 键切换边缘模糊
-                    if self.warp_ready and self.show_warped and self.enable_pixel_warp:
-                        self.enable_edge_blur = not self.enable_edge_blur
-                        if self.enable_edge_blur:
-                            print("边缘滤波已启用")
+                            print("变形功能未启用，请先按M键进行检测")
+                    elif key == ord('P') or key == ord('p'):  # 'P' 或 'p' 键切换像素变形
+                        if self.warp_ready and self.show_warped:
+                            self.enable_pixel_warp = not self.enable_pixel_warp
+                            if self.enable_pixel_warp:
+                                print("像素级人脸变形已启用")
+                                self.previous_landmarks = None
+                            else:
+                                print("像素级人脸变形已关闭")
                         else:
-                            print("边缘滤波已关闭")
-                    else:
-                        print("请先启用像素级人脸变形功能")
-                elif key == ord('W') or key == ord('w'):  # 'W' 或 'w' 键切换黑色线框显示
-                    if self.enable_pixel_warp and self.enable_lambert_material:
-                        self.enable_wireframe = not self.enable_wireframe
-                        if self.enable_wireframe:
-                            print("黑色线框显示已开启 (Lambert材质模式)")
+                            print("请先启用变形功能（按M键检测，按X键切换到变形显示）")
+                    elif key == ord('E') or key == ord('e'):  # 'E' 或 'e' 键导出变形后的landmarks为OBJ文件
+                        if self.warp_ready and self.diff_transformed is not None and detection_result and detection_result.face_landmarks:
+                            current_landmarks = np.array([[lm.x, lm.y, lm.z] for lm in detection_result.face_landmarks[0][:468]], dtype=np.float32)
+                            corrected_coords = current_landmarks.copy()
+                            corrected_coords[:, 0] *= self.x_scale_factor
+                            warped_coords = corrected_coords + self.diff_transformed
+                            warped_coords[:, 0] /= self.x_scale_factor
+                            exported_file = self.export_warped_landmarks_to_obj(warped_coords)
+                            if exported_file:
+                                print(f"✅ 变形后的人脸模型已导出: {exported_file}")
+                            else:
+                                print("❌ 导出变形后的人脸模型失败")
                         else:
-                            print("黑色线框显示已关闭 (Lambert材质模式)")
-                    elif self.enable_pixel_warp and not self.enable_lambert_material:
-                        print("线框功能仅在Lambert材质模式下可用")
-                    else:
-                        print("请先启用像素级人脸变形功能")
-                elif key == ord('G') or key == ord('g'):  # 'G' 或 'g' 键切换纹理模式
-                    self.enable_lambert_material = not self.enable_lambert_material
-                    print(f"纹理模式已切换为: {'Lambert材质' if self.enable_lambert_material else '原始纹理'}")
-                elif key == ord('O') or key == ord('o'):  # 'O' 或 'o' 键切换面部专用模式
-                    self.enable_face_only_mode = not self.enable_face_only_mode
-                    print(f"面部专用模式已切换为: {'只显示面部，背景纯黑' if self.enable_face_only_mode else '显示完整人脸'}")
-                elif key == ord('R') or key == ord('r'):  # 'R' 或 'r' 键切换录制
-                    if not self.save_output_video:
-                        # 开始录制
-                        if self.init_video_writer(camera_width, camera_height, 30.0):  # 假设30FPS
-                            self.save_output_video = True
+                            if not self.warp_ready:
+                                print("⚠️ 还未进行M键对齐，无法导出变形模型")
+                            elif detection_result is None or not detection_result.face_landmarks:
+                                print("⚠️ 当前帧未检测到人脸，无法导出")
+                            else:
+                                print("⚠️ 变形功能未就绪，无法导出")
+                    elif key == ord('R') or key == ord('r'):  # 'R' 或 'r' 键切换录制
+                        if not hasattr(self, 'save_output_video'):
+                            self.save_output_video = False
+                            self.output_video_writer = None
+                        if not self.save_output_video:
+                            if self.init_video_writer(camera_width, camera_height, 30.0):  # 假设30FPS
+                                self.save_output_video = True
+                            else:
+                                print("无法开始录制")
                         else:
-                            print("无法开始录制")
-                    else:
-                        # 停止录制
-                        self.save_output_video = False
-                        self.cleanup_video_writer()
-                elif key == ord('T') or key == ord('t'):  # 'T' 或 't' 键切换透视投影/弱透视投影
-                    if self.enable_perspective_projection:
-                        self.enable_perspective_projection = False
-                        print("切换到弱透视投影")
-                    else:
-                        self.enable_perspective_projection = True
-                        print("切换到透视投影")
-                elif key == ord('Y') or key == ord('y'):  # 'Y' 或 'y' 键切换landmarks渲染的透视效果
-                    self.enable_landmarks_perspective = not self.enable_landmarks_perspective
-                    print(f"Landmarks渲染透视效果: {'开启' if self.enable_landmarks_perspective else '关闭'}")
-                elif key == ord('1'):  # '1' 键减小透视强度（模拟长焦镜头）
-                    self.perspective_intensity = max(0.1, self.perspective_intensity - 0.1)
-                    focal_length_equiv = int(35 / self.perspective_intensity) if self.perspective_intensity > 0 else 350
-                    print(f"透视强度: {self.perspective_intensity:.1f} (约等效{focal_length_equiv}mm焦距)")
-                elif key == ord('2'):  # '2' 键增大透视强度（模拟广角镜头）
-                    self.perspective_intensity = min(2.0, self.perspective_intensity + 0.1)
-                    focal_length_equiv = int(35 / self.perspective_intensity)
-                    print(f"透视强度: {self.perspective_intensity:.1f} (约等效{focal_length_equiv}mm焦距)")
-                elif key == ord('5'):  # '5' 键减小基础深度（更近距离拍摄效果）
-                    self.perspective_base_depth = max(10.0, self.perspective_base_depth - 5.0)
-                    print(f"基础深度: {self.perspective_base_depth:.1f}cm (距离越近透视越强)")
-                elif key == ord('6'):  # '6' 键增大基础深度（更远距离拍摄效果）
-                    self.perspective_base_depth = min(100.0, self.perspective_base_depth + 5.0)
-                    print(f"基础深度: {self.perspective_base_depth:.1f}cm (距离越远透视越弱)")
-                elif key == ord('7'):  # '7' 键减小深度变化范围
-                    self.perspective_depth_variation = max(-100.0, self.perspective_depth_variation - 5.0)
-                    effect_type = "反向透视" if self.perspective_depth_variation < 0 else "常规透视" if self.perspective_depth_variation > 0 else "正交投影"
-                    print(f"深度变化: {self.perspective_depth_variation:.1f}cm ({effect_type})")
-                elif key == ord('8'):  # '8' 键增大深度变化范围
-                    self.perspective_depth_variation = min(100.0, self.perspective_depth_variation + 5.0)
-                    effect_type = "反向透视" if self.perspective_depth_variation < 0 else "常规透视" if self.perspective_depth_variation > 0 else "正交投影"
-                    print(f"深度变化: {self.perspective_depth_variation:.1f}cm ({effect_type})")
-                elif key == ord('9'):  # '9' 键减小上下透视强度
-                    self.vertical_perspective_strength = max(0.0, self.vertical_perspective_strength - 0.1)
-                    print(f"上下透视强度: {self.vertical_perspective_strength:.1f}")
-                elif key == ord('0'):  # '0' 键增大上下透视强度
-                    self.vertical_perspective_strength = min(2.0, self.vertical_perspective_strength + 0.1)
-                    print(f"上下透视强度: {self.vertical_perspective_strength:.1f}")
-                elif key == ord('/'):  # '/' 键减小左右透视强度
-                    self.horizontal_perspective_strength = max(0.0, self.horizontal_perspective_strength - 0.1)
-                    print(f"左右透视强度: {self.horizontal_perspective_strength:.1f}")
-                elif key == ord('*'):  # '*' 键增大左右透视强度
-                    self.horizontal_perspective_strength = min(2.0, self.horizontal_perspective_strength + 0.1)
-                    print(f"左右透视强度: {self.horizontal_perspective_strength:.1f}")
-                elif key == ord('A') or key == ord('a'):  # 'A' 或 'a' 键左右移动面部
-                    self.face_offset_x = max(-1.0, self.face_offset_x - 0.05)
-                    print(f"面部X方向偏移调整为: {self.face_offset_x:.2f}")
-                elif key == ord('D') or key == ord('d'):  # 'D' 或 'd' 键左右移动面部
-                    self.face_offset_x = min(1.0, self.face_offset_x + 0.05)
-                    print(f"面部X方向偏移调整为: {self.face_offset_x:.2f}")
-                elif key == ord('Z') or key == ord('z'):  # 'Z' 或 'z' 键上下移动面部
-                    self.face_offset_y = max(-1.0, self.face_offset_y - 0.05)
-                    print(f"面部Y方向偏移调整为: {self.face_offset_y:.2f}")
-                elif key == ord('C') or key == ord('c'):  # 'C' 或 'c' 键上下移动面部
-                    self.face_offset_y = min(1.0, self.face_offset_y + 0.05)
-                    print(f"面部Y方向偏移调整为: {self.face_offset_y:.2f}")
-                elif key == ord('J') or key == ord('j'):  # 'J' 或 'j' 键调节透视中心X偏移
-                    self.perspective_center_offset_x = max(-100, self.perspective_center_offset_x - 5)
-                    print(f"透视中心X偏移调整为: {self.perspective_center_offset_x}")
-                elif key == ord('L') or key == ord('l'):  # 'L' 或 'l' 键调节透视中心X偏移
-                    self.perspective_center_offset_x = min(100, self.perspective_center_offset_x + 5)
-                    print(f"透视中心X偏移调整为: {self.perspective_center_offset_x}")
-                elif key == ord('I') or key == ord('i'):  # 'I' 或 'i' 键调节透视中心Y偏移
-                    self.perspective_center_offset_y = max(-100, self.perspective_center_offset_y - 5)
-                    print(f"透视中心Y偏移调整为: {self.perspective_center_offset_y}")
-                elif key == ord('K') or key == ord('k'):  # 'K' 或 'k' 键调节透视中心Y偏移
-                    self.perspective_center_offset_y = min(100, self.perspective_center_offset_y + 5)
-                    print(f"透视中心Y偏移调整为: {self.perspective_center_offset_y}")
+                            self.save_output_video = False
+                            self.cleanup_video_writer()
+                    elif key == ord('H') or key == ord('h'):  # 'H' 或 'h' 键切换landmarks显示
+                        self.show_landmarks = not self.show_landmarks
+                        if self.show_landmarks:
+                            print("landmarks线框显示已开启")
+                        else:
+                            print("landmarks线框显示已隐藏")
+                    elif key == ord('['):  # '[' 键缩小landmarks
+                        if self.warp_ready and self.show_warped:
+                            self.landmarks_scale = max(0.1, self.landmarks_scale - self.scale_step)
+                            print(f"landmarks缩放调整为: {self.landmarks_scale:.2f}x")
+                        else:
+                            print("请先启用变形功能")
+                    elif key == ord(']'):  # ']' 键放大landmarks
+                        if self.warp_ready and self.show_warped:
+                            self.landmarks_scale = min(3.0, self.landmarks_scale + self.scale_step)
+                            print(f"landmarks缩放调整为: {self.landmarks_scale:.2f}x")
+                        else:
+                            print("请先启用变形功能")
                 
+                except Exception as frame_error:
+                    print(f"处理帧时出现错误: {frame_error}")
+                    import traceback
+                    traceback.print_exc()
+                    continue  # 继续处理下一帧
+            
         except KeyboardInterrupt:
             print("\n程序被用户中断")
         finally:
             # 清理资源
             cap.release()
             cv2.destroyAllWindows()
-            if self.save_output_video:
-                self.cleanup_video_writer()
             print("摄像头检测完成")
 
     def load_obj_vertices(self, path):
@@ -1278,11 +1096,80 @@ class FaceLandmarkerCamera:
             
         print("✅ 自动化精确对齐流程完成！")
         print("实时变形功能已启用，可以按X键切换显示效果")
+
+    def export_warped_landmarks_to_obj(self, warped_landmarks, filename=None):
+        """将变形后的landmarks导出为OBJ文件"""
+        try:
+            if filename is None:
+                timestamp = int(time.time())
+                filename = f'warped_face_model_{timestamp}.obj'
+            
+            # 确保保存在 auto_gen/result_file 文件夹中
+            result_dir = os.path.join("..", "auto_gen", "result_file")
+            os.makedirs(result_dir, exist_ok=True)
+            filepath = os.path.join(result_dir, filename)
+            
+            # 坐标系转换：MediaPipe归一化坐标 -> OBJ 3D坐标
+            # 使用与csv_to_obj_converter.py相同的转换参数
+            aspect_ratio_correction = 16.0 / 9.0  # ≈ 1.777
+            overall_scale = 55.0
+            
+            print(f"\n=== 导出变形后的人脸模型 ===")
+            print(f"将变形后的归一化坐标转换为OBJ 3D坐标")
+            print(f"输出文件: {filepath}")
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                # 写入OBJ文件头部
+                f.write("# 变形后的面部模型\n")
+                f.write(f"# 生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"# 基于MediaPipe face landmarks，应用了目标模型形状差异\n")
+                f.write(f"# 总顶点数: {len(warped_landmarks)}\n")
+                f.write("\n")
+                
+                # 转换坐标并写入顶点
+                for i, (x_norm, y_norm, z_norm) in enumerate(warped_landmarks):
+                    # 坐标转换（与csv_to_obj_converter.py保持一致）
+                    x_3d = (x_norm - 0.5) * aspect_ratio_correction * overall_scale
+                    y_3d = -(y_norm - 0.5) * overall_scale  # Y轴翻转
+                    z_3d = -z_norm * aspect_ratio_correction * overall_scale  # Z轴翻转并缩放
+                    
+                    f.write(f"v {x_3d:.6f} {y_3d:.6f} {z_3d:.6f}\n")
+                
+                # 添加面部网格连接信息（可选）
+                f.write("\n# 面部网格连接\n")
+                f.write("# 使用MediaPipe FACEMESH_TESSELATION连接\n")
+                
+                # 如果需要添加面的定义，可以基于MediaPipe的连接信息
+                # 这里暂时只保存顶点，因为主要用于形状分析
+            
+            print(f"✅ 变形后的人脸模型已导出: {filepath}")
+            
+            # 统计变形后的坐标范围
+            coords_3d = []
+            for x_norm, y_norm, z_norm in warped_landmarks:
+                x_3d = (x_norm - 0.5) * aspect_ratio_correction * overall_scale
+                y_3d = -(y_norm - 0.5) * overall_scale
+                z_3d = -z_norm * aspect_ratio_correction * overall_scale
+                coords_3d.append([x_3d, y_3d, z_3d])
+            
+            coords_3d = np.array(coords_3d)
+            print(f"变形后模型3D坐标范围:")
+            print(f"  X: [{coords_3d[:, 0].min():.3f}, {coords_3d[:, 0].max():.3f}]")
+            print(f"  Y: [{coords_3d[:, 1].min():.3f}, {coords_3d[:, 1].max():.3f}]")
+            print(f"  Z: [{coords_3d[:, 2].min():.3f}, {coords_3d[:, 2].max():.3f}]")
+            
+            return filepath
+            
+        except Exception as e:
+            print(f"导出变形后模型失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
     
     def save_averaged_landmarks_to_csv(self, avg_landmarks, filename=None):
         """保存平均landmarks到CSV文件，返回文件路径"""
         # 确保csv_files文件夹存在
-        csv_dir = os.path.join("auto_gen", "csv_files")
+        csv_dir = os.path.join("..", "auto_gen", "csv_files")
         if not os.path.exists(csv_dir):
             os.makedirs(csv_dir)
             print(f"创建CSV文件夹: {csv_dir}")
@@ -1291,7 +1178,7 @@ class FaceLandmarkerCamera:
         if filename is None:
             timestamp = int(time.time())
             filename = f'averaged_landmarks_{timestamp}.csv'
-        filepath = os.path.join(csv_dir, filename)
+        filepath = os.path.join(csv_dir, filename)  
         
         try:
             with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
@@ -1340,7 +1227,7 @@ class FaceLandmarkerCamera:
             
             if success:
                 # 转换器会自动把文件放在result_file文件夹中
-                result_filepath = os.path.join("result_file", output_obj_name)
+                result_filepath = os.path.join("..", "auto_gen", "result_file", output_obj_name)
                 if os.path.exists(result_filepath):
                     return result_filepath
                 else:
@@ -1481,75 +1368,6 @@ class FaceLandmarkerCamera:
             import traceback
             traceback.print_exc()
             return False
-
-    def export_warped_landmarks_to_obj(self, warped_landmarks, filename=None):
-        """将变形后的landmarks导出为OBJ文件"""
-        try:
-            if filename is None:
-                timestamp = int(time.time())
-                filename = f'warped_face_model_{timestamp}.obj'
-            
-            # 确保保存在result_file文件夹中（而不是output_dir）
-            result_dir = "result_file"
-            os.makedirs(result_dir, exist_ok=True)
-            filepath = os.path.join(result_dir, filename)
-            
-            # 坐标系转换：MediaPipe归一化坐标 -> OBJ 3D坐标
-            # 使用与csv_to_obj_converter.py相同的转换参数
-            aspect_ratio_correction = 16.0 / 9.0  # ≈ 1.777
-            overall_scale = 55.0
-            
-            print(f"\n=== 导出变形后的人脸模型 ===")
-            print(f"将变形后的归一化坐标转换为OBJ 3D坐标")
-            print(f"输出文件: {filepath}")
-            
-            with open(filepath, 'w', encoding='utf-8') as f:
-                # 写入OBJ文件头部
-                f.write("# 变形后的面部模型\n")
-                f.write(f"# 生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"# 基于MediaPipe face landmarks，应用了目标模型形状差异\n")
-                f.write(f"# 总顶点数: {len(warped_landmarks)}\n")
-                f.write("\n")
-                
-                # 转换坐标并写入顶点
-                for i, (x_norm, y_norm, z_norm) in enumerate(warped_landmarks):
-                    # 坐标转换（与csv_to_obj_converter.py保持一致）
-                    x_3d = (x_norm - 0.5) * aspect_ratio_correction * overall_scale
-                    y_3d = -(y_norm - 0.5) * overall_scale  # Y轴翻转
-                    z_3d = -z_norm * aspect_ratio_correction * overall_scale  # Z轴翻转并缩放
-                    
-                    f.write(f"v {x_3d:.6f} {y_3d:.6f} {z_3d:.6f}\n")
-                
-                # 添加面部网格连接信息（可选）
-                f.write("\n# 面部网格连接\n")
-                f.write("# 使用MediaPipe FACEMESH_TESSELATION连接\n")
-                
-                # 如果需要添加面的定义，可以基于MediaPipe的连接信息
-                # 这里暂时只保存顶点，因为主要用于形状分析
-            
-            print(f"✅ 变形后的人脸模型已导出: {filepath}")
-            
-            # 统计变形后的坐标范围
-            coords_3d = []
-            for x_norm, y_norm, z_norm in warped_landmarks:
-                x_3d = (x_norm - 0.5) * aspect_ratio_correction * overall_scale
-                y_3d = -(y_norm - 0.5) * overall_scale
-                z_3d = -z_norm * aspect_ratio_correction * overall_scale
-                coords_3d.append([x_3d, y_3d, z_3d])
-            
-            coords_3d = np.array(coords_3d)
-            print(f"变形后模型3D坐标范围:")
-            print(f"  X: [{coords_3d[:, 0].min():.3f}, {coords_3d[:, 0].max():.3f}]")
-            print(f"  Y: [{coords_3d[:, 1].min():.3f}, {coords_3d[:, 1].max():.3f}]")
-            print(f"  Z: [{coords_3d[:, 2].min():.3f}, {coords_3d[:, 2].max():.3f}]")
-            
-            return filepath
-            
-        except Exception as e:
-            print(f"导出变形后模型失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
 
     def load_chinese_font(self):
         """加载中文字体用于GUI显示"""

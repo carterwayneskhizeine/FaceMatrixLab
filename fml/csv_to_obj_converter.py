@@ -161,7 +161,7 @@ class LandmarksToObjConverter:
         normalized_landmarks = self.normalize_landmarks(landmarks_data)
         
         # 创建输出文件夹
-        output_dir = "result_file"
+        output_dir = os.path.join("..", "auto_gen", "result_file")
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
             print(f"创建输出文件夹: {output_dir}")
