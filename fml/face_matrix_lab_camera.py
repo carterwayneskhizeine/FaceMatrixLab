@@ -14,7 +14,7 @@ import os
 import csv
 from PIL import Image, ImageDraw, ImageFont
 import platform
-from face_warper import FaceWarper
+
 
 # 按照官方文档推荐的导入方式
 BaseOptions = mp.tasks.BaseOptions
@@ -68,12 +68,7 @@ class FaceLandmarkerCamera:
         # 变形显示控制
         self.show_warped = True  # True=显示变形后，False=显示原始
         
-        # 初始化人脸变形器
-        self.face_warper = FaceWarper()
-        
-        # 像素变形控制
-        self.enable_pixel_warp = False  # 控制是否启用像素级变形
-        self.previous_landmarks = None  # 用于平滑处理
+        # 像素变形控制已移除
         # 透视投影控制
         self.enable_perspective_projection = True  # 是否使用透视投影
         self.enable_landmarks_perspective = True   # 是否在landmarks渲染时应用透视效果
@@ -135,7 +130,7 @@ class FaceLandmarkerCamera:
         print("按 'L' 键保存当前landmarks到CSV文件")
         print("按 'M' 键重新检测前60帧并计算变换")
         print("按 'X' 键切换原始/变形landmarks显示")
-        print("按 'P' 键切换像素级人脸变形显示")
+
         print("按 'H' 键隐藏/显示landmarks线框")
         print("按 '[' 键缩小landmarks，']' 键放大landmarks")
         print("按 'ESC' 键或 'Q' 键退出程序")
@@ -218,16 +213,8 @@ class FaceLandmarkerCamera:
     def draw_landmarks_on_image(self, rgb_image, detection_result):
         """在图像上绘制人脸标志点并应用像素级变形"""
         try:
-            # 如果启用像素变形且变换已就绪，进行像素级变形
-            if (self.enable_pixel_warp and self.warp_ready and 
-                self.diff_transformed is not None and self.show_warped and 
-                detection_result.face_landmarks):
-                
-                # 进行像素级人脸变形
-                warped_image = self.apply_pixel_warp(rgb_image, detection_result)
-                annotated_image = np.copy(warped_image)
-            else:
-                annotated_image = np.copy(rgb_image)
+            # 像素级变形功能已移除
+            annotated_image = np.copy(rgb_image)
             
             # 绘制人脸标志点
             if detection_result.face_landmarks:
@@ -426,77 +413,7 @@ class FaceLandmarkerCamera:
             traceback.print_exc()
             return dst_landmarks.copy()
     
-    def apply_pixel_warp(self, rgb_image, detection_result):
-        """应用像素级人脸变形"""
-        try:
-            if not detection_result.face_landmarks:
-                return rgb_image
-            
-            # 获取第一个检测到的人脸landmarks
-            face_landmarks = detection_result.face_landmarks[0]
-            
-            # 转换为归一化坐标数组
-            original_coords = np.array([[lm.x, lm.y, lm.z] for lm in face_landmarks[:468]], dtype=np.float32)
-            
-            # 平滑处理，减少抖动
-            if self.previous_landmarks is not None:
-                original_coords = self.face_warper.smooth_landmarks(
-                    original_coords, self.previous_landmarks, smoothing_factor=0.7
-                )
-            self.previous_landmarks = original_coords.copy()
-            
-            # 计算变形后的坐标
-            warped_coords = original_coords.copy()
-            
-            # 应用形状差异变换
-            corrected_coords = original_coords.copy()
-            corrected_coords[:, 0] *= self.x_scale_factor
-            
-            # 加上形状差异
-            warped_coords = corrected_coords + self.diff_transformed
-            
-            # 将x坐标还原到16:9坐标系
-            warped_coords[:, 0] /= self.x_scale_factor
-            
-            # 应用landmarks缩放调整
-            if self.landmarks_scale != 1.0:
-                # 计算landmarks中心点
-                center = np.mean(warped_coords, axis=0)
-                # 以中心点为基准进行缩放
-                warped_coords = center + (warped_coords - center) * self.landmarks_scale
-            
 
-            
-            # 应用透视投影变形
-            if self.enable_perspective_projection:
-                warped_coords = self.apply_perspective_warp_to_landmarks(None, warped_coords)
-                print(f"透视投影已应用，基础深度: {self.perspective_base_depth:.0f}cm, 深度变化: {self.perspective_depth_variation:.0f}cm")
-            
-            # 【新增】应用面部整体平移
-            if self.face_offset_x != 0.0 or self.face_offset_y != 0.0:
-                warped_coords[:, 0] += self.face_offset_x  # X方向平移
-                warped_coords[:, 1] += self.face_offset_y  # Y方向平移
-            
-            # 应用人脸变形
-            warped_image = self.face_warper.apply_face_warp(
-                rgb_image,
-                original_coords,
-                warped_coords,
-                blend_ratio=1.0,  # 完全替换
-                enable_blur_edge=self.enable_edge_blur,
-                enable_wireframe=self.enable_wireframe,
-                use_lambert_material=self.enable_lambert_material,
-                face_only_mode=self.enable_face_only_mode,
-                wireframe_thickness=self.wireframe_thickness
-            )
-            
-            return warped_image
-            
-        except Exception as e:
-            print(f"像素变形失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return rgb_image
     
     def save_landmarks_to_csv(self, landmarks_list, filename=None):
         """保存landmarks到CSV文件"""
@@ -590,35 +507,7 @@ class FaceLandmarkerCamera:
             image = self.put_chinese_text(image, '边缘滤波已关闭 (按B启用)', 
                                         (10, height - 20), font_size=18, color=(128, 128, 128))
         
-        # 显示线框状态
-        if self.enable_pixel_warp and self.enable_lambert_material:
-            if self.enable_wireframe:
-                image = self.put_chinese_text(image, f'黑色线框已启用 粗细:{self.wireframe_thickness:.1f} (按W关闭，+/-调节)', 
-                                            (10, height - 80), font_size=18, color=(255, 255, 255))
-            else:
-                image = self.put_chinese_text(image, '黑色线框已关闭 (Lambert材质模式) (按W启用)', 
-                                            (10, height - 80), font_size=18, color=(128, 128, 128))
-        elif self.enable_pixel_warp and not self.enable_lambert_material:
-            image = self.put_chinese_text(image, '线框在原始纹理模式下不显示', 
-                                        (10, height - 80), font_size=18, color=(128, 128, 128))
-        
-        # 显示纹理模式状态
-        if self.enable_pixel_warp:
-            if self.enable_lambert_material:
-                image = self.put_chinese_text(image, '纹理模式: Lambert材质 (按G切换)', 
-                                            (10, height - 60), font_size=18, color=(192, 192, 192))
-            else:
-                image = self.put_chinese_text(image, '纹理模式: 原始纹理复制 (按G切换)', 
-                                            (10, height - 60), font_size=18, color=(255, 128, 0))
-        
-        # 显示面部专用模式状态
-        if self.enable_pixel_warp:
-            if self.enable_face_only_mode:
-                image = self.put_chinese_text(image, '面部专用模式: 只显示面部，背景纯黑 (按O切换)', 
-                                            (10, height - 40), font_size=18, color=(255, 255, 0))
-            else:
-                image = self.put_chinese_text(image, '面部专用模式: 显示完整人脸 (按O切换)', 
-                                            (10, height - 40), font_size=18, color=(128, 128, 128))
+        # 像素变形相关的显示功能已移除
         
         # 显示透视投影状态
         if self.enable_perspective_projection:
@@ -660,10 +549,7 @@ class FaceLandmarkerCamera:
         # 显示landmarks缩放状态
         if self.warp_ready and self.show_warped:
             scale_text = f'landmarks缩放: {self.landmarks_scale:.2f}x (按[/]调整)'
-            if self.enable_pixel_warp:
-                y_pos = height - 240
-            else:
-                y_pos = height - 200
+            y_pos = height - 200
             image = self.put_chinese_text(image, scale_text, 
                                         (10, y_pos), font_size=18, color=(255, 255, 0))
         
@@ -672,15 +558,8 @@ class FaceLandmarkerCamera:
         # 显示变形状态
         if self.warp_ready:
             if self.show_warped:
-                if self.enable_pixel_warp:
-                    texture_mode = "Lambert材质" if self.enable_lambert_material else "原始纹理"
-                    image = self.put_chinese_text(image, f'像素级人脸变形已启用 ({texture_mode}) (按P关闭)', 
-                                                (10, height - 140), font_size=18, color=(255, 0, 255))
-                    image = self.put_chinese_text(image, '脸型变形已启用 (按X切换)', 
-                                                (10, height - 100), font_size=18, color=(0, 255, 255))
-                else:
-                    image = self.put_chinese_text(image, '脸型变形已启用 (按X切换, P启用像素变形)', 
-                                                (10, height - 100), font_size=18, color=(0, 255, 255))
+                image = self.put_chinese_text(image, '脸型变形已启用 (按X切换)', 
+                                            (10, height - 100), font_size=18, color=(0, 255, 255))
             else:
                 image = self.put_chinese_text(image, '显示原始landmarks (按X切换)', 
                                             (10, height - 100), font_size=18, color=(255, 128, 0))
@@ -837,7 +716,6 @@ class FaceLandmarkerCamera:
         print("  'Q' 或 ESC - 退出")
         print("  'M' - 重新检测并计算变换")
         print("  'X' - 切换原始/变形显示")
-        print("  'P' - 切换像素级变形")
         print("  'E' - 导出变形后的人脸模型为OBJ文件")
         print("  'H' - 隐藏/显示landmarks线框")
         print("  '[' 键缩小landmarks，']' 键放大landmarks")
@@ -934,16 +812,7 @@ class FaceLandmarkerCamera:
                                 print("切换到原始landmarks显示")
                         else:
                             print("变形功能未启用，请先按M键进行检测")
-                    elif key == ord('P') or key == ord('p'):  # 'P' 或 'p' 键切换像素变形
-                        if self.warp_ready and self.show_warped:
-                            self.enable_pixel_warp = not self.enable_pixel_warp
-                            if self.enable_pixel_warp:
-                                print("像素级人脸变形已启用")
-                                self.previous_landmarks = None
-                            else:
-                                print("像素级人脸变形已关闭")
-                        else:
-                            print("请先启用变形功能（按M键检测，按X键切换到变形显示）")
+
                     elif key == ord('E') or key == ord('e'):  # 'E' 或 'e' 键导出变形后的landmarks为OBJ文件
                         if self.warp_ready and self.diff_transformed is not None and detection_result and detection_result.face_landmarks:
                             current_landmarks = np.array([[lm.x, lm.y, lm.z] for lm in detection_result.face_landmarks[0][:468]], dtype=np.float32)
@@ -1330,6 +1199,12 @@ class FaceLandmarkerCamera:
             
             # 保存变换参数到文件
             try:
+                # 确保目录存在
+                npy_dir = os.path.dirname(self.transform_file)
+                if not os.path.exists(npy_dir):
+                    os.makedirs(npy_dir)
+                    print(f"创建目录: {npy_dir}")
+                
                 np.save(self.transform_file, self.diff_transformed)
                 print(f"变换参数已保存到: {self.transform_file}")
             except Exception as e:
@@ -1442,8 +1317,6 @@ class FaceLandmarkerCamera:
         self.frame_count = 0
         self.warp_ready = False
         self.diff_transformed = None
-        self.enable_pixel_warp = False  # 重置像素变形状态
-        self.previous_landmarks = None  # 重置平滑处理缓存
         print("已重置变换参数")
 
     def load_camera_calibration(self):
