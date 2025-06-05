@@ -69,6 +69,10 @@ class FaceLandmarkerCamera:
         self.show_warped = True  # True=显示变形后，False=显示原始
         
         # 像素变形控制已移除
+        
+        # 【性能优化】性能模式设置
+        self.performance_mode = True  # 启用性能优化模式
+        
         # 透视投影控制
         self.enable_perspective_projection = True  # 是否使用透视投影
         self.enable_landmarks_perspective = True   # 是否在landmarks渲染时应用透视效果
@@ -77,6 +81,12 @@ class FaceLandmarkerCamera:
         self.perspective_base_depth = 45.0  # 基础深度（厘米）- 假设的标准拍摄距离
         self.perspective_depth_variation = 55.0  # 深度变化范围（厘米）- 控制透视强度，正值=常规透视，负值=反向透视
         self.perspective_intensity = 1.0 # 在新模型中，此参数不再直接控制透视强度，可用于后续可能的畸变调整
+        
+        # 【修复】添加缺失的透视参数，确保与face_landmarker_cmaera_new.py一致
+        self.vertical_perspective_strength = 0.0  # 上下透视强度
+        self.vertical_perspective_center = 0.5  # 上下透视中心位置  
+        self.horizontal_perspective_strength = 0.0  # 左右透视强度
+        self.horizontal_perspective_center = 0.5  # 左右透视中心位置
         
 
         
@@ -250,7 +260,8 @@ class FaceLandmarkerCamera:
 
                         
                         # 在landmarks渲染阶段应用透视变换
-                        if self.enable_perspective_projection and self.enable_landmarks_perspective:
+                        if (self.enable_perspective_projection and self.enable_landmarks_perspective 
+                            and not self.performance_mode):  # 性能模式下跳过透视投影
                             # 使用透视变换函数处理landmarks点
                             display_coords = self.apply_perspective_warp_to_landmarks(None, warped_coords.copy())
                         else:
@@ -260,7 +271,8 @@ class FaceLandmarkerCamera:
                     else:
                         
                         # 即使在原始模式下，也可以应用透视效果
-                        if self.enable_perspective_projection and self.enable_landmarks_perspective and not self.show_warped:
+                        if (self.enable_perspective_projection and self.enable_landmarks_perspective 
+                            and not self.show_warped and not self.performance_mode):  # 性能模式下跳过
                             # 注意：这里我们仅对显示坐标应用透视，不影响原始坐标
                             coords = self.apply_perspective_warp_to_landmarks(None, coords.copy())
                     
@@ -342,68 +354,59 @@ class FaceLandmarkerCamera:
             perspective_cx = face_center_x + self.perspective_center_offset_x
             perspective_cy = face_center_y + self.perspective_center_offset_y
             
-            # 每100帧打印一次透视中心信息
-            if hasattr(self, '_debug_frame_count') and self._debug_frame_count % 100 == 0:
-                print(f"透视中心: ({perspective_cx:.1f}, {perspective_cy:.1f}), 画面中心: ({self.camera_width/2:.1f}, {self.camera_height/2:.1f})")
+            # 【性能优化】减少调试信息输出频率
+            # if hasattr(self, '_debug_frame_count') and self._debug_frame_count % 1000 == 0:
+            #     print(f"透视中心: ({perspective_cx:.1f}, {perspective_cy:.1f}), 画面中心: ({self.camera_width/2:.1f}, {self.camera_height/2:.1f})")
 
             projected_dst = dst_landmarks.copy()
 
-            # 【调试信息】分析MediaPipe z值分布
-            z_values = [lm[2] for lm in dst_landmarks]
-            z_min, z_max, z_mean = min(z_values), max(z_values), np.mean(z_values)
-            z_std = np.std(z_values)
-            
-            # 每100帧打印一次调试信息
-            if hasattr(self, '_debug_frame_count'):
-                self._debug_frame_count += 1
-            else:
+            # 【性能优化】减少Z值统计计算频率
+            if not hasattr(self, '_debug_frame_count'):
                 self._debug_frame_count = 0
-                
-            if self._debug_frame_count % 100 == 0:
-                print(f"MediaPipe Z值分析: min={z_min:.4f}, max={z_max:.4f}, mean={z_mean:.4f}, std={z_std:.4f}")
+            self._debug_frame_count += 1
+            
+            # 只在前几帧或者每1000帧计算一次Z值统计，避免每帧计算
+            if self._debug_frame_count < 10 or self._debug_frame_count % 1000 == 0:
+                z_values = dst_landmarks[:, 2]  # 直接使用numpy切片，更快
+                z_mean = np.mean(z_values)
+                # 缓存z_mean以供后续帧使用
+                self._cached_z_mean = z_mean
+            else:
+                # 使用缓存的z_mean
+                z_mean = getattr(self, '_cached_z_mean', 0.0)
 
             # 【改进算法】更直观的透视控制
             # 如果depth_variation为0，返回正交投影（无透视变化）
             if abs(self.perspective_depth_variation) < 1e-6:
                 return dst_landmarks.copy()
             
-            for i in range(len(dst_landmarks)):
-                xn, yn, zn = dst_landmarks[i]
+            # 【性能优化】使用向量化操作替代循环
+            # 1. 批量转换归一化坐标为像素坐标
+            x_pixels = dst_landmarks[:, 0] * self.camera_width
+            y_pixels = dst_landmarks[:, 1] * self.camera_height
+            z_values = dst_landmarks[:, 2]
 
-                # 1. 将归一化坐标转换为像素坐标
-                x_pixel = xn * self.camera_width
-                y_pixel = yn * self.camera_height
+            # 2. 批量计算相对于人脸中心的3D坐标
+            standard_depth = self.perspective_base_depth
+            cam_X = (x_pixels - perspective_cx) * standard_depth / fx
+            cam_Y = (y_pixels - perspective_cy) * standard_depth / fy
 
-                # 2. 使用人脸中心作为透视中心，计算相对于人脸中心的3D坐标
-                standard_depth = self.perspective_base_depth
-                cam_X = (x_pixel - perspective_cx) * standard_depth / fx
-                cam_Y = (y_pixel - perspective_cy) * standard_depth / fy
+            # 3. 批量计算深度变化
+            z_offsets = z_values - z_mean
+            depth_changes = z_offsets * self.perspective_depth_variation
+            actual_depths = standard_depth + depth_changes
+            
+            # 确保深度为正值
+            actual_depths = np.maximum(actual_depths, 0.1)
 
-                # 3. 【改进】更灵活的深度调整策略
-                # 将MediaPipe的z值映射到深度变化
-                # zn通常在[-0.1, 0.1]范围内，我们需要将其放大到有意义的深度变化
-                
-                # 计算相对于z均值的偏差
-                z_offset = zn - z_mean
-                
-                # 应用深度变化（支持正负值）
-                # 正值：z值大的点更远，z值小的点更近（常规透视）
-                # 负值：z值大的点更近，z值小的点更远（反向透视）
-                depth_change = z_offset * self.perspective_depth_variation
-                actual_depth = standard_depth + depth_change
-                
-                # 确保深度为正值
-                if actual_depth <= 0.1:
-                    actual_depth = 0.1
+            # 4. 批量重新投影到2D
+            new_x_pixels = fx * cam_X / actual_depths + perspective_cx
+            new_y_pixels = fy * cam_Y / actual_depths + perspective_cy
 
-                # 4. 用新的深度重新投影到2D，仍然以人脸中心为透视中心
-                new_x_pixel = fx * cam_X / actual_depth + perspective_cx
-                new_y_pixel = fy * cam_Y / actual_depth + perspective_cy
-
-                # 5. 转换回归一化坐标
-                projected_dst[i, 0] = new_x_pixel / self.camera_width
-                projected_dst[i, 1] = new_y_pixel / self.camera_height
-                projected_dst[i, 2] = zn  # 保持原始z值用于其他处理
+            # 5. 批量转换回归一化坐标
+            projected_dst[:, 0] = new_x_pixels / self.camera_width
+            projected_dst[:, 1] = new_y_pixels / self.camera_height
+            # z值保持不变
 
             return projected_dst
             
@@ -458,22 +461,17 @@ class FaceLandmarkerCamera:
             return False
 
     def draw_info_on_image(self, image, detection_result):
-        """在图像上绘制检测信息"""
+        """在图像上绘制检测信息 - 性能优化版本"""
         height, width, _ = image.shape
         
+        # 【性能优化】只显示关键信息，减少文本绘制次数
         # 绘制检测到的人脸数量
         if detection_result.face_landmarks:
             face_count = len(detection_result.face_landmarks)
-            image = self.put_chinese_text(image, f'检测到人脸: {face_count}', 
+            image = self.put_chinese_text(image, f'Faces: {face_count}', 
                                         (10, 30), font_size=24, color=(0, 255, 0))
-            
-            # 如果有面部表情数据，显示一些信息
-            if detection_result.face_blendshapes:
-                y_offset = 70
-                image = self.put_chinese_text(image, '面部表情检测已启用', 
-                                            (10, y_offset), font_size=18, color=(255, 255, 0))
         else:
-            image = self.put_chinese_text(image, '未检测到人脸', 
+            image = self.put_chinese_text(image, 'No faces', 
                                         (10, 30), font_size=24, color=(0, 0, 255))
         
         # 显示FPS信息
@@ -481,101 +479,30 @@ class FaceLandmarkerCamera:
         image = self.put_chinese_text(image, fps_text, 
                                     (width - 150, 30), font_size=20, color=(255, 255, 255))
         
-        # 显示摄像头分辨率信息
-        resolution_text = f'分辨率: {self.camera_width}x{self.camera_height}'
-        image = self.put_chinese_text(image, resolution_text, 
-                                    (width - 250, 70), font_size=18, color=(255, 255, 255))
-        
-        # 显示录制状态
-        if self.save_output_video:
-            image = self.put_chinese_text(image, '正在录制输出视频', 
-                                        (10, height - 160), font_size=18, color=(255, 0, 0))
-        
-        # 显示landmarks状态
-        if self.show_landmarks:
-            image = self.put_chinese_text(image, 'landmarks显示已开启 (按H隐藏)', 
-                                        (10, height - 140), font_size=18, color=(0, 255, 0))
-        else:
-            image = self.put_chinese_text(image, 'landmarks显示已隐藏 (按H显示)', 
-                                        (10, height - 140), font_size=18, color=(128, 128, 128))
-        
-        # 显示边缘模糊状态
-        if self.enable_edge_blur:
-            image = self.put_chinese_text(image, '边缘滤波已启用 (按B关闭)', 
-                                        (10, height - 20), font_size=18, color=(255, 192, 0))
-        else:
-            image = self.put_chinese_text(image, '边缘滤波已关闭 (按B启用)', 
-                                        (10, height - 20), font_size=18, color=(128, 128, 128))
-        
-        # 像素变形相关的显示功能已移除
-        
-        # 显示透视投影状态
-        if self.enable_perspective_projection:
-            if abs(self.perspective_depth_variation) < 1e-6:
-                effect_type = "正交投影"
-            elif self.perspective_depth_variation > 0:
-                effect_type = "常规透视"
-            else:
-                effect_type = "反向透视"
-            perspective_text = f'透视投影: 基础深度{self.perspective_base_depth:.0f}cm 深度变化{self.perspective_depth_variation:.0f}cm ({effect_type})'
-            image = self.put_chinese_text(image, perspective_text, 
-                                        (10, height - 175), font_size=18, color=(255, 128, 255))
-            # 显示landmarks渲染透视状态
-            landmarks_perspective_text = f'Landmarks渲染透视: {"开启" if self.enable_landmarks_perspective else "关闭"} (按Y切换)'
-            image = self.put_chinese_text(image, landmarks_perspective_text, 
-                                        (10, height - 235), font_size=18, color=(128, 255, 255))
-        else:
-            image = self.put_chinese_text(image, '透视投影已关闭 (弱透视模式)', 
-                                        (10, height - 175), font_size=18, color=(128, 128, 128))
-        
-        # 显示面部偏移状态
-        if self.face_offset_x != 0.0 or self.face_offset_y != 0.0:
-            offset_text = f'面部偏移: X={self.face_offset_x:.2f}, Y={self.face_offset_y:.2f} (A/D/Z/C调节)'
-            image = self.put_chinese_text(image, offset_text, 
-                                        (10, height - 195), font_size=18, color=(255, 255, 128))
-        else:
-            image = self.put_chinese_text(image, '面部偏移: 居中 (A/D/Z/C调节)', 
-                                        (10, height - 195), font_size=18, color=(128, 128, 128))
-        
-        # 显示透视中心偏移状态
-        if self.perspective_center_offset_x != 0.0 or self.perspective_center_offset_y != 0.0:
-            center_text = f'透视中心偏移: X={self.perspective_center_offset_x:.0f}, Y={self.perspective_center_offset_y:.0f}px (J/L/I/K调节)'
-            image = self.put_chinese_text(image, center_text, 
-                                        (10, height - 215), font_size=18, color=(128, 255, 255))
-        else:
-            image = self.put_chinese_text(image, '透视中心: 基于人脸中心 (J/L/I/K调节)', 
-                                        (10, height - 215), font_size=18, color=(128, 128, 128))
-        
-        # 显示landmarks缩放状态
-        if self.warp_ready and self.show_warped:
-            scale_text = f'landmarks缩放: {self.landmarks_scale:.2f}x (按[/]调整)'
-            y_pos = height - 200
-            image = self.put_chinese_text(image, scale_text, 
-                                        (10, y_pos), font_size=18, color=(255, 255, 0))
-        
-        # 宽度比例功能已删除，不再显示
+        # 【性能优化】只显示最重要的状态信息
         
         # 显示变形状态
         if self.warp_ready:
             if self.show_warped:
-                image = self.put_chinese_text(image, '脸型变形已启用 (按X切换)', 
-                                            (10, height - 100), font_size=18, color=(0, 255, 255))
+                image = self.put_chinese_text(image, 'Warping ON (X to toggle)', 
+                                            (10, height - 80), font_size=18, color=(0, 255, 255))
             else:
-                image = self.put_chinese_text(image, '显示原始landmarks (按X切换)', 
-                                            (10, height - 100), font_size=18, color=(255, 128, 0))
+                image = self.put_chinese_text(image, 'Original view (X to toggle)', 
+                                            (10, height - 80), font_size=18, color=(255, 128, 0))
         elif self.frame_count > 0 and self.frame_count < self.N:
-            image = self.put_chinese_text(image, f'正在收集landmarks: {self.frame_count}/{self.N}', 
-                                        (10, height - 100), font_size=18, color=(255, 255, 0))
+            image = self.put_chinese_text(image, f'Collecting: {self.frame_count}/{self.N}', 
+                                        (10, height - 80), font_size=18, color=(255, 255, 0))
         else:
-            image = self.put_chinese_text(image, '按M键开始变形检测', 
-                                        (10, height - 100), font_size=18, color=(128, 128, 128))
+            image = self.put_chinese_text(image, 'Press M to start', 
+                                        (10, height - 80), font_size=18, color=(128, 128, 128))
         
-        # 显示面部转换矩阵第一行（如有）
-        if self.geometry_matrices:
-            mat = self.geometry_matrices[0]  # 假设仅第一个人脸
-            row0 = mat[:4]
-            image = self.put_chinese_text(image, f"Mat0: {row0[0]:.2f},{row0[1]:.2f},{row0[2]:.2f},{row0[3]:.2f}",
-                                         (10, height-300), font_size=18, color=(255,192,0))
+        # 显示landmarks状态
+        if self.show_landmarks:
+            image = self.put_chinese_text(image, 'Landmarks ON (H to hide)', 
+                                        (10, height - 50), font_size=18, color=(0, 255, 0))
+        else:
+            image = self.put_chinese_text(image, 'Landmarks OFF (H to show)', 
+                                        (10, height - 50), font_size=18, color=(128, 128, 128))
         
         return image
 
@@ -815,14 +742,41 @@ class FaceLandmarkerCamera:
 
                     elif key == ord('E') or key == ord('e'):  # 'E' 或 'e' 键导出变形后的landmarks为OBJ文件
                         if self.warp_ready and self.diff_transformed is not None and detection_result and detection_result.face_landmarks:
+                            # 【修复】使用与实时显示相同的完整变形流程
                             current_landmarks = np.array([[lm.x, lm.y, lm.z] for lm in detection_result.face_landmarks[0][:468]], dtype=np.float32)
+                            
+                            # 应用形状差异变换
                             corrected_coords = current_landmarks.copy()
                             corrected_coords[:, 0] *= self.x_scale_factor
+                            
+                            # 加上形状差异
                             warped_coords = corrected_coords + self.diff_transformed
+                            
+                            # 将x坐标还原到16:9坐标系
                             warped_coords[:, 0] /= self.x_scale_factor
+                            
+                            # 【新增】应用landmarks缩放调整（与实时显示保持一致）
+                            if self.landmarks_scale != 1.0:
+                                # 计算landmarks中心点
+                                center = np.mean(warped_coords, axis=0)
+                                # 以中心点为基准进行缩放
+                                warped_coords = center + (warped_coords - center) * self.landmarks_scale
+
+                            # 【新增】应用透视投影变形（如果启用）- 导出时强制应用，不受性能模式影响
+                            if self.enable_perspective_projection and self.enable_landmarks_perspective:
+                                warped_coords = self.apply_perspective_warp_to_landmarks(None, warped_coords)
+                                print("导出时应用了透视投影变形")
+                            
+                            # 【新增】应用面部整体平移
+                            if self.face_offset_x != 0.0 or self.face_offset_y != 0.0:
+                                warped_coords[:, 0] += self.face_offset_x  # X方向平移
+                                warped_coords[:, 1] += self.face_offset_y  # Y方向平移
+                                print(f"导出时应用了面部偏移: X={self.face_offset_x:.3f}, Y={self.face_offset_y:.3f}")
+                            
                             exported_file = self.export_warped_landmarks_to_obj(warped_coords)
                             if exported_file:
                                 print(f"✅ 变形后的人脸模型已导出: {exported_file}")
+                                print(f"应用的变形: 形状差异 + 缩放({self.landmarks_scale:.2f}x) + 透视投影 + 面部偏移")
                             else:
                                 print("❌ 导出变形后的人脸模型失败")
                         else:
@@ -1267,32 +1221,16 @@ class FaceLandmarkerCamera:
             return ImageFont.load_default()
     
     def put_chinese_text(self, img, text, position, font_size=24, color=(0, 255, 0)):
-        """在图像上绘制中文文字"""
+        """在图像上绘制中文文字 - 性能优化版本"""
         try:
-            # 将OpenCV图像转换为PIL图像
-            img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-            draw = ImageDraw.Draw(img_pil)
-            
-            # 如果需要特定大小的字体
-            if hasattr(self, 'chinese_font'):
-                try:
-                    font = ImageFont.truetype(self.chinese_font.path, font_size)
-                except:
-                    font = self.chinese_font
-            else:
-                font = ImageFont.load_default()
-            
-            # 绘制文字
-            draw.text(position, text, font=font, fill=color)
-            
-            # 转换回OpenCV格式
-            img_cv = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
-            return img_cv
-        except Exception as e:
-            print(f"绘制中文文字失败: {e}")
-            # 如果失败，使用英文替代
+            # 【性能优化】直接使用OpenCV绘制，避免PIL转换
+            # 使用英文替代中文以提升性能
             cv2.putText(img, text.encode('ascii', 'ignore').decode('ascii'), 
-                       position, cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                       position, cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 1)
+            return img
+        except Exception as e:
+            # 如果失败，使用简单文本
+            cv2.putText(img, "Text", position, cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 1)
             return img
 
     def load_saved_transform(self):
