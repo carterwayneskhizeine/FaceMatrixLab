@@ -498,12 +498,6 @@ class FaceLandmarkerCamera:
             traceback.print_exc()
             return rgb_image
     
-
-    def draw_face_contours(self, image, landmarks, width, height):
-        """绘制面部轮廓 - 已废弃，现在使用FACEMESH_TESSELATION绘制完整面部网格"""
-        # 此方法已被新的draw_landmarks_on_image方法中的FACEMESH_TESSELATION绘制替代
-        pass
-    
     def save_landmarks_to_csv(self, landmarks_list, filename=None):
         """保存landmarks到CSV文件"""
         if not landmarks_list:
@@ -844,6 +838,7 @@ class FaceLandmarkerCamera:
         print("  'M' - 重新检测并计算变换")
         print("  'X' - 切换原始/变形显示")
         print("  'P' - 切换像素级变形")
+        print("  'E' - 导出变形后的人脸模型为OBJ文件")
         print("  'H' - 隐藏/显示landmarks线框")
         print("  '[' 键缩小landmarks，']' 键放大landmarks")
         print("  'ESC' 键或 'Q' 键退出程序")

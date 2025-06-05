@@ -11,7 +11,7 @@ import sys
 
 
 class LandmarksToObjConverter:
-    def __init__(self, template_obj_path='obj/canonical_face_model.obj'):
+    def __init__(self, template_obj_path='../obj/canonical_face_model.obj'):
         """初始化转换器"""
         self.template_obj_path = template_obj_path
         self.texture_coords = []
