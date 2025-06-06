@@ -403,10 +403,19 @@ class FaceMaskRenderer:
         vertical_vector = chin_point - forehead_point
         pitch_angle = np.arctan2(vertical_vector[2], vertical_vector[1])
         
-        # Yaw角度：根据Z轴深度差计算头部左右转动
+        # 🔧 修复Yaw角度：使用更准确的头部朝向计算
+        # 方法1：基于左右脸颊的Z深度差，但增强幅度
         z_left = left_cheek_point[2]
         z_right = right_cheek_point[2]
-        yaw_angle = -np.arctan2(z_right - z_left, face_width) * 0.5
+        z_diff = z_right - z_left
+        
+        # 方法2：结合X坐标差异来增强Yaw检测
+        # 当头向左转时，右脸颊会比左脸颊更靠近屏幕中心
+        x_center = (left_cheek_point[0] + right_cheek_point[0]) / 2
+        x_offset = face_center_x - x_center  # 面部中心相对于脸颊中心的偏移
+        
+        # 综合计算Yaw角度
+        yaw_angle = np.arctan2(z_diff, face_width) * 2.0 + x_offset * 0.5  # 🔧 增强敏感度
         
         # 4. 坐标系转换 - 将归一化坐标转换为模型坐标
         screen_width = self.render_width
@@ -428,6 +437,7 @@ class FaceMaskRenderer:
             print(f"基础缩放: X={base_scale_x:.3f}, Y={base_scale_y:.3f}")
             print(f"缩小系数: {size_reduction}")
             print(f"最终缩放因子: X={scale_x:.3f}, Y={scale_y:.3f}, Z={scale_z:.3f}")
+            print(f"Yaw计算: Z差值={z_diff:.4f}, X偏移={x_offset:.4f}")
             print(f"旋转角度: Roll={np.degrees(roll_angle):.1f}°, Pitch={np.degrees(pitch_angle):.1f}°, Yaw={np.degrees(yaw_angle):.1f}°")
             print(f"面部中心: ({face_center_x:.4f}, {face_center_y:.4f}, {face_center_z:.4f})")
             print(f"屏幕坐标: ({screen_center_x:.1f}, {screen_center_y:.1f})")
