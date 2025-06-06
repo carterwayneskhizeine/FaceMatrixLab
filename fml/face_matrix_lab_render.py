@@ -54,7 +54,22 @@ class FaceMatrixLabRenderer:
         self.background_image = None
         self.latest_camera_frame = None  # 保存最新的摄像机帧
         
-        # 相机参数（50mm 等效焦距）
+        # 【新增】相机校准参数加载
+        self.use_real_calibration = True  # 是否使用真实校准参数
+        self.calibration_intrinsic_path = "Camera-Calibration/output/intrinsic.txt"  # 内参文件路径
+        self.calibration_extrinsic_path = "Camera-Calibration/output/extrinsic.txt"  # 外参文件路径
+        
+        # 相机参数（将根据真实校准或手动设置）
+        self.camera_fx = None
+        self.camera_fy = None
+        self.camera_cx = None
+        self.camera_cy = None
+        self.camera_skew = 0.0  # 倾斜参数
+        
+        # 加载真实相机校准参数
+        self.load_camera_calibration()
+        
+        # 相机参数（50mm 等效焦距）- 将在setup_camera_parameters中根据校准结果设置
         self.setup_camera_parameters()
         
         # 加载3D模型
@@ -88,28 +103,136 @@ class FaceMatrixLabRenderer:
         
         return model_path
     
+    def load_camera_calibration(self):
+        """加载真实的相机校准参数"""
+        if not self.use_real_calibration:
+            print("📷 未启用真实相机校准，将使用默认估计参数")
+            return
+        
+        try:
+            # 加载内参矩阵
+            if os.path.exists(self.calibration_intrinsic_path):
+                print(f"📷 正在加载相机内参: {self.calibration_intrinsic_path}")
+                
+                # 读取内参文件
+                with open(self.calibration_intrinsic_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # 解析内参矩阵 - 支持多种格式
+                lines = content.strip().split('\n')
+                matrix_lines = []
+                for line in lines:
+                    line = line.strip()
+                    if line and not line.startswith('A=') and '[' in line and ']' in line:
+                        # 清理方括号并提取数字
+                        line = line.replace('[', '').replace(']', '')
+                        matrix_lines.append(line)
+                
+                if len(matrix_lines) >= 3:
+                    # 解析3x3内参矩阵
+                    intrinsic_matrix = []
+                    for line in matrix_lines[:3]:
+                        # 分割数字（处理可能的科学计数法）
+                        values = []
+                        parts = line.split()
+                        for part in parts:
+                            try:
+                                values.append(float(part))
+                            except ValueError:
+                                continue
+                        if len(values) >= 3:
+                            intrinsic_matrix.append(values[:3])
+                    
+                    if len(intrinsic_matrix) == 3:
+                        # 提取相机参数
+                        A = np.array(intrinsic_matrix)
+                        self.camera_fx = A[0, 0]  # fx
+                        self.camera_fy = A[1, 1]  # fy
+                        self.camera_cx = A[0, 2]  # cx (主点x坐标)
+                        self.camera_cy = A[1, 2]  # cy (主点y坐标)
+                        self.camera_skew = A[0, 1]  # skew (倾斜参数)
+                        
+                        print("✅ 成功加载相机内参:")
+                        print(f"   fx (x方向焦距): {self.camera_fx:.2f}")
+                        print(f"   fy (y方向焦距): {self.camera_fy:.2f}")
+                        print(f"   cx (主点x坐标): {self.camera_cx:.2f}")
+                        print(f"   cy (主点y坐标): {self.camera_cy:.2f}")
+                        print(f"   skew (倾斜参数): {self.camera_skew:.4f}")
+                    else:
+                        raise ValueError("无法解析内参矩阵格式")
+                else:
+                    raise ValueError("内参文件格式不正确")
+                    
+            else:
+                print(f"❌ 内参文件不存在: {self.calibration_intrinsic_path}")
+                self.use_real_calibration = False
+                return
+            
+            # 加载外参矩阵（可选，用于更复杂的3D投影）
+            if os.path.exists(self.calibration_extrinsic_path):
+                print(f"📷 检测到外参文件: {self.calibration_extrinsic_path}")
+                # 注意：当前代码主要使用内参进行透视投影，外参暂不使用
+                # 如果需要更精确的3D几何计算，可以在这里加载外参矩阵
+            
+            print("✅ 相机校准参数加载完成")
+            
+        except Exception as e:
+            print(f"❌ 加载相机校准参数失败: {e}")
+            print("⚠️ 将回退到手动估计相机参数")
+            self.use_real_calibration = False
+            # 重置相机参数
+            self.camera_fx = None
+            self.camera_fy = None
+            self.camera_cx = None
+            self.camera_cy = None
+            self.camera_skew = 0.0
+        
     def setup_camera_parameters(self):
-        """设置相机参数（50mm等效焦距）"""
-        # 50mm 等效焦距参数
-        f_mm = 50.0  # 焦距(mm)
-        sensor_width_mm = 36.0  # 全画幅传感器宽度(mm)
-        
-        # 计算像素焦距
-        self.fx = (f_mm / sensor_width_mm) * self.render_width
-        self.fy = (f_mm / sensor_width_mm) * self.render_height  # 假设正方形像素
-        self.cx = self.render_width / 2.0
-        self.cy = self.render_height / 2.0
-        
-        print(f"📷 相机参数设置:")
+        """设置相机参数（优先使用真实校准参数，否则使用50mm等效焦距估计）"""
+        print("📷 相机参数设置:")
         print(f"   分辨率: {self.render_width}x{self.render_height}")
-        print(f"   焦距: fx={self.fx:.2f}, fy={self.fy:.2f}")
-        print(f"   主点: cx={self.cx:.2f}, cy={self.cy:.2f}")
+        
+        # 如果成功加载了真实校准参数，直接使用
+        if (self.use_real_calibration and 
+            self.camera_fx is not None and self.camera_fy is not None and 
+            self.camera_cx is not None and self.camera_cy is not None):
+            
+            self.fx = self.camera_fx
+            self.fy = self.camera_fy
+            self.cx = self.camera_cx
+            self.cy = self.camera_cy
+            
+            print("✅ 使用真实相机校准参数:")
+            print(f"   焦距: fx={self.fx:.2f}, fy={self.fy:.2f}")
+            print(f"   主点: cx={self.cx:.2f}, cy={self.cy:.2f}")
+            if self.camera_skew != 0.0:
+                print(f"   倾斜: skew={self.camera_skew:.4f}")
+        
+        else:
+            # 回退到50mm等效焦距估计
+            print("⚠️ 使用50mm等效焦距估计参数:")
+            
+            # 50mm 等效焦距参数
+            f_mm = 50.0  # 焦距(mm)
+            sensor_width_mm = 36.0  # 全画幅传感器宽度(mm)
+            
+            # 计算像素焦距
+            self.fx = (f_mm / sensor_width_mm) * self.render_width
+            self.fy = (f_mm / sensor_width_mm) * self.render_height  # 假设正方形像素
+            self.cx = self.render_width / 2.0
+            self.cy = self.render_height / 2.0
+            
+            print(f"   焦距: fx={self.fx:.2f}, fy={self.fy:.2f}")
+            print(f"   主点: cx={self.cx:.2f}, cy={self.cy:.2f}")
+            print(f"   注意: 这是基于50mm等效焦距的估计值")
         
         # 创建Open3D相机内参
         self.intrinsic = o3d.camera.PinholeCameraIntrinsic(
             self.render_width, self.render_height, 
             self.fx, self.fy, self.cx, self.cy
         )
+        
+        print(f"✅ Open3D相机内参创建完成")
     
     def load_face_model(self):
         """加载3D人脸模型"""
@@ -486,6 +609,15 @@ class FaceMatrixLabRenderer:
         """启动渲染器"""
         print("\n启动FaceMatrixLab 3D渲染器（AR增强现实版本）")
         print("=" * 60)
+        print("📷 相机系统:")
+        if self.use_real_calibration and self.camera_fx is not None:
+            print("  ✅ 使用真实相机校准参数")
+            print(f"  📂 内参文件: {self.calibration_intrinsic_path}")
+        else:
+            print("  ⚠️ 使用估计相机参数（50mm等效焦距）")
+            print("  💡 如需精确渲染，请将相机校准文件放置在:")
+            print(f"     {self.calibration_intrinsic_path}")
+        print("=" * 60)
         print("控制说明:")
         print("  O键: 切换摄像机背景显示（AR模式 / 纯3D模式）")
         print("  Q键: 退出程序")
@@ -518,6 +650,7 @@ def main():
     """主函数"""
     print("FaceMatrixLab 3D 人脸渲染器（AR增强现实版本）")
     print("使用MediaPipe + Open3D实现实时3D人脸追踪渲染 + AR叠加效果")
+    print("支持真实相机校准参数，提供更精确的3D投影效果")
     print("=" * 60)
     
     # 检查模型文件
@@ -526,6 +659,16 @@ def main():
         print(f"❌ 错误：模型文件不存在 {model_path}")
         print("请确保Andy_Wah_facemesh.obj文件位于 obj/ 目录中")
         return
+    
+    # 检查相机校准文件（可选）
+    calibration_path = "Camera-Calibration/output/intrinsic.txt"
+    if os.path.exists(calibration_path):
+        print(f"✅ 发现相机校准文件：{calibration_path}")
+        print("将使用真实相机参数进行精确3D渲染")
+    else:
+        print(f"⚠️ 未发现相机校准文件：{calibration_path}")
+        print("将使用默认估计参数（50mm等效焦距）")
+        print("💡 如需获得最佳渲染效果，建议先进行相机校准")
     
     try:
         # 创建并运行渲染器
