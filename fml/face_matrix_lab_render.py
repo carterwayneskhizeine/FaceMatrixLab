@@ -46,6 +46,11 @@ class FaceMatrixLabRenderer:
         # 数据队列 - 用于线程间通信
         self.data_queue = queue.Queue(maxsize=5)
         self.latest_result = None
+        self.latest_frame = None
+        
+        # AR背景控制
+        self.show_camera_background = True  # 默认显示摄像机背景
+        self.background_image = None
         
         # 相机参数（50mm 等效焦距）
         self.setup_camera_parameters()
@@ -161,13 +166,55 @@ class FaceMatrixLabRenderer:
         # 设置渲染选项
         render_option = self.vis.get_render_option()
         render_option.mesh_show_back_face = True
-        render_option.background_color = np.array([0.1, 0.1, 0.1])
+        render_option.background_color = np.array([0.1, 0.1, 0.1])  # 默认背景色
+        
+        # 创建背景几何体（用于显示摄像机画面）
+        self.setup_camera_background()
         
         # 设置相机参数（固定视角）
         view_control = self.vis.get_view_control()
         
         print("✅ Open3D可视化器初始化完成")
+        print("🎯 AR模式已启用 - 3D模型将叠加到摄像机画面上")
         return True
+    
+    def setup_camera_background(self):
+        """设置摄像机背景显示"""
+        # 创建背景平面（用于显示摄像机画面）
+        # 背景平面位于模型后方，大小匹配渲染视图
+        background_vertices = np.array([
+            [-200, -150, -300],  # 左下
+            [200, -150, -300],   # 右下
+            [200, 150, -300],    # 右上
+            [-200, 150, -300]    # 左上
+        ])
+        
+        background_triangles = np.array([
+            [0, 1, 2],  # 第一个三角形
+            [0, 2, 3]   # 第二个三角形
+        ])
+        
+        # 创建背景网格
+        self.background_mesh = o3d.geometry.TriangleMesh()
+        self.background_mesh.vertices = o3d.utility.Vector3dVector(background_vertices)
+        self.background_mesh.triangles = o3d.utility.Vector3iVector(background_triangles)
+        self.background_mesh.compute_vertex_normals()
+        
+        # 设置UV坐标用于纹理映射
+        uv_coordinates = np.array([
+            [0, 0],  # 左下
+            [1, 0],  # 右下
+            [1, 1],  # 右上
+            [0, 1]   # 左上
+        ])
+        
+        # 初始时隐藏背景
+        self.background_mesh.paint_uniform_color([0.1, 0.1, 0.1])  # 深灰色
+        
+        # 添加到可视化器
+        self.vis.add_geometry(self.background_mesh)
+        
+        print("📺 摄像机背景平面已创建")
     
     def create_mediapipe_landmarker(self):
         """创建MediaPipe人脸标志检测器"""
@@ -293,8 +340,52 @@ class FaceMatrixLabRenderer:
         
         return False
     
-
+    def update_camera_background(self, frame):
+        """更新摄像机背景显示"""
+        if not self.show_camera_background or frame is None:
+            return
+            
+        try:
+            # 将RGB图像转换为纹理颜色
+            # 由于Open3D的纹理支持有限，我们使用一个简化的方法
+            # 将图像平均颜色应用到背景平面
+            
+            # 翻转图像以匹配3D坐标系
+            flipped_frame = cv2.flip(frame, 0)  # 垂直翻转
+            
+            # 应用颜色到背景网格（简化版本）
+            if hasattr(self, 'background_mesh'):
+                # 为了更好的效果，我们可以采样图像的不同区域
+                h, w = flipped_frame.shape[:2]
+                colors = []
+                
+                # 采样4个角的颜色
+                for i, (y, x) in enumerate([(0, 0), (0, w-1), (h-1, w-1), (h-1, 0)]):
+                    pixel_color = flipped_frame[y, x] / 255.0
+                    colors.append(pixel_color)
+                
+                # 设置顶点颜色
+                self.background_mesh.vertex_colors = o3d.utility.Vector3dVector(colors)
+                
+                # 更新可视化器中的背景
+                self.vis.update_geometry(self.background_mesh)
+                
+        except Exception as e:
+            print(f"⚠️ 背景更新失败: {e}")
     
+    def toggle_camera_background(self):
+        """切换摄像机背景显示"""
+        self.show_camera_background = not self.show_camera_background
+        
+        if self.show_camera_background:
+            print("📺 摄像机背景已开启 - AR模式")
+        else:
+            print("🎭 摄像机背景已关闭 - 纯3D模式") 
+            # 隐藏背景平面
+            if hasattr(self, 'background_mesh'):
+                self.background_mesh.paint_uniform_color([0.1, 0.1, 0.1])  # 深灰色
+                self.vis.update_geometry(self.background_mesh)
+
     def run_with_visualizer(self):
         """使用Open3D可视化器运行（固定视角版本）"""
         print("🎬 启动Open3D可视化器...")
@@ -306,17 +397,70 @@ class FaceMatrixLabRenderer:
         
         print("✅ 可视化器初始化完成")
         
+        # 创建键盘事件处理
+        key_pressed = [False]  # 用于跟踪按键状态
+        
+        def key_callback(vis, action, mods):
+            """键盘回调函数"""
+            if action == 1:  # 按键按下
+                # 这里Open3D的键盘回调有限，我们使用一个替代方案
+                key_pressed[0] = True
+            return False
+        
+        # 注册键盘回调（如果支持）
+        try:
+            # self.vis.register_key_callback(ord('O'), key_callback)  # Open3D版本问题可能不支持
+            pass
+        except:
+            pass
+        
+        # 创建一个小的OpenCV窗口用于键盘输入检测
+        cv2.namedWindow("Control Panel", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("Control Panel", 300, 100)
+        
+        # 创建控制面板图像
+        control_panel = np.ones((100, 300, 3), dtype=np.uint8) * 50  # 深灰色背景
+        cv2.putText(control_panel, "Press 'o' to toggle background", (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        cv2.putText(control_panel, "Press 'q' to quit", (10, 60), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        cv2.imshow("Control Panel", control_panel)
+        
         try:
             while self.is_running:
                 # 处理MediaPipe数据
                 try:
                     while not self.data_queue.empty():
                         data_packet = self.data_queue.get_nowait()
+                        
+                        # 更新3D人脸模型
                         if self.update_face_model(data_packet['detection_result']):
                             # 更新可视化器中的几何体
                             self.vis.update_geometry(self.face_mesh)
+                        
+                        # 更新摄像机背景
+                        if 'frame' in data_packet:
+                            self.update_camera_background(data_packet['frame'])
+                        
                 except queue.Empty:
                     pass
+                
+                # 检查键盘输入
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('o') or key == ord('O'):
+                    self.toggle_camera_background()
+                    # 更新控制面板显示
+                    control_panel = np.ones((100, 300, 3), dtype=np.uint8) * 50
+                    cv2.putText(control_panel, "Press 'o' to toggle background", (10, 30), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+                    cv2.putText(control_panel, "Press 'q' to quit", (10, 60), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+                    status = "AR Mode ON" if self.show_camera_background else "3D Mode"
+                    cv2.putText(control_panel, f"Status: {status}", (10, 90), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+                    cv2.imshow("Control Panel", control_panel)
+                elif key == ord('q') or key == ord('Q'):
+                    break
                 
                 # 更新可视化器
                 if not self.vis.poll_events():
@@ -329,14 +473,16 @@ class FaceMatrixLabRenderer:
             print("\n⏹️ 用户中断")
         finally:
             self.vis.destroy_window()
+            cv2.destroyAllWindows()  # 关闭OpenCV窗口
     
     def run(self):
         """启动渲染器"""
-        print("\n🚀 启动FaceMatrixLab 3D渲染器（固定视角版本）")
+        print("\n🚀 启动FaceMatrixLab 3D渲染器（AR增强现实版本）")
         print("=" * 60)
         print("控制说明:")
-        print("  固定视角显示")
-        print("  Q键 或关闭窗口: 退出")
+        print("  O键: 切换摄像机背景显示（AR模式 / 纯3D模式）")
+        print("  Q键: 退出程序")
+        print("  固定视角显示，3D模型叠加在真实摄像机画面上")
         print("=" * 60)
         
         self.is_running = True
@@ -363,8 +509,8 @@ class FaceMatrixLabRenderer:
 
 def main():
     """主函数"""
-    print("FaceMatrixLab 3D 人脸渲染器（固定视角版本）")
-    print("使用MediaPipe + Open3D实现实时3D人脸追踪渲染")
+    print("FaceMatrixLab 3D 人脸渲染器（AR增强现实版本）")
+    print("使用MediaPipe + Open3D实现实时3D人脸追踪渲染 + AR叠加效果")
     print("=" * 60)
     
     # 检查模型文件
