@@ -16,6 +16,7 @@ import queue
 from typing import Optional, Tuple
 import open3d as o3d
 
+
 # MediaPipe 导入
 BaseOptions = mp.tasks.BaseOptions
 FaceLandmarker = mp.tasks.vision.FaceLandmarker
@@ -51,6 +52,7 @@ class FaceMatrixLabRenderer:
         # AR背景控制
         self.show_camera_background = True  # 默认显示摄像机背景
         self.background_image = None
+        self.latest_camera_frame = None  # 保存最新的摄像机帧
         
         # 相机参数（50mm 等效焦距）
         self.setup_camera_parameters()
@@ -153,29 +155,29 @@ class FaceMatrixLabRenderer:
             return False
     
     def setup_visualizer(self):
-        """设置Open3D可视化器（固定视角版本）"""
+        """设置Open3D可视化器（离屏渲染版本，兼容Windows）"""
         print("🎨 初始化Open3D可视化器...")
-        
-        # 创建可视化器
+        # 创建隐藏的可视化器窗口进行离屏渲染
         self.vis = o3d.visualization.Visualizer()
-        self.vis.create_window("FaceMatrixLab - 3D Face Renderer", self.render_width, self.render_height)
+        self.vis.create_window("_", self.render_width, self.render_height, visible=False)
         
-        # 添加模型到可视化器
+        # 添加人脸模型（不使用MaterialRecord，直接使用网格颜色）
         self.vis.add_geometry(self.face_mesh)
         
         # 设置渲染选项
         render_option = self.vis.get_render_option()
         render_option.mesh_show_back_face = True
-        render_option.background_color = np.array([0.1, 0.1, 0.1])  # 默认背景色
+        render_option.background_color = np.array([0.0, 0.0, 0.0])  # 黑色背景便于合成
         
-        # 创建背景几何体（用于显示摄像机画面）
-        self.setup_camera_background()
-        
-        # 设置相机参数（固定视角）
-        view_control = self.vis.get_view_control()
+        # 设置相机参数
+        ctr = self.vis.get_view_control()
+        # 创建相机参数对象
+        camera_params = o3d.camera.PinholeCameraParameters()
+        camera_params.intrinsic = self.intrinsic
+        camera_params.extrinsic = np.eye(4)
+        ctr.convert_from_pinhole_camera_parameters(camera_params)
         
         print("✅ Open3D可视化器初始化完成")
-        print("🎯 AR模式已启用 - 3D模型将叠加到摄像机画面上")
         return True
     
     def setup_camera_background(self):
@@ -342,34 +344,59 @@ class FaceMatrixLabRenderer:
     
     def update_camera_background(self, frame):
         """更新摄像机背景显示"""
-        if not self.show_camera_background or frame is None:
+        if frame is None:
             return
             
+        # 保存最新帧用于显示
+        self.latest_camera_frame = frame.copy()
+        
         try:
-            # 将RGB图像转换为纹理颜色
-            # 由于Open3D的纹理支持有限，我们使用一个简化的方法
-            # 将图像平均颜色应用到背景平面
-            
-            # 翻转图像以匹配3D坐标系
-            flipped_frame = cv2.flip(frame, 0)  # 垂直翻转
-            
-            # 应用颜色到背景网格（简化版本）
-            if hasattr(self, 'background_mesh'):
-                # 为了更好的效果，我们可以采样图像的不同区域
-                h, w = flipped_frame.shape[:2]
-                colors = []
+            if self.show_camera_background:
+                # 方案1：在独立的OpenCV窗口中显示摄像机画面
+                # 创建AR合成视图
+                display_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 
-                # 采样4个角的颜色
-                for i, (y, x) in enumerate([(0, 0), (0, w-1), (h-1, w-1), (h-1, 0)]):
-                    pixel_color = flipped_frame[y, x] / 255.0
-                    colors.append(pixel_color)
+                # 添加AR信息叠加
+                overlay_text = "AR Background - Live Camera"
+                cv2.putText(display_frame, overlay_text, (10, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                 
-                # 设置顶点颜色
-                self.background_mesh.vertex_colors = o3d.utility.Vector3dVector(colors)
+                # 显示摄像机背景窗口
+                cv2.namedWindow("Camera Background", cv2.WINDOW_NORMAL)
+                cv2.resizeWindow("Camera Background", 640, 480)
+                cv2.imshow("Camera Background", display_frame)
                 
-                # 更新可视化器中的背景
+                # 方案2：同时尝试改进3D背景平面的显示
+                if hasattr(self, 'background_mesh'):
+                    # 使用图像的整体亮度来调整背景平面
+                    avg_brightness = np.mean(frame) / 255.0
+                    
+                    # 根据摄像机画面调整背景色
+                    # 取不同区域的颜色
+                    h, w = frame.shape[:2]
+                    
+                    # 更密集的采样以获得更好的效果
+                    sample_points = [
+                        (h//4, w//4),     # 左上
+                        (h//4, 3*w//4),   # 右上
+                        (3*h//4, 3*w//4), # 右下
+                        (3*h//4, w//4)    # 左下
+                    ]
+                    
+                    colors = []
+                    for y, x in sample_points:
+                        pixel_color = frame[y, x] / 255.0
+                        # 增强颜色饱和度以便更好地显示
+                        pixel_color = pixel_color * 1.5
+                        pixel_color = np.clip(pixel_color, 0, 1)
+                        colors.append(pixel_color)
+                    
+                    # 设置顶点颜色
+                    self.background_mesh.vertex_colors = o3d.utility.Vector3dVector(colors)
+                    
+                                    # 更新可视化器中的背景
                 self.vis.update_geometry(self.background_mesh)
-                
+                    
         except Exception as e:
             print(f"⚠️ 背景更新失败: {e}")
     
@@ -379,105 +406,85 @@ class FaceMatrixLabRenderer:
         
         if self.show_camera_background:
             print("📺 摄像机背景已开启 - AR模式")
+            # 显示最新的摄像机画面（如果有的话）
+            if self.latest_camera_frame is not None:
+                self.update_camera_background(self.latest_camera_frame)
         else:
             print("🎭 摄像机背景已关闭 - 纯3D模式") 
+            # 关闭摄像机背景窗口
+            try:
+                cv2.destroyWindow("Camera Background")
+            except:
+                pass
+            
             # 隐藏背景平面
             if hasattr(self, 'background_mesh'):
                 self.background_mesh.paint_uniform_color([0.1, 0.1, 0.1])  # 深灰色
                 self.vis.update_geometry(self.background_mesh)
 
     def run_with_visualizer(self):
-        """使用Open3D可视化器运行（固定视角版本）"""
-        print("🎬 启动Open3D可视化器...")
-        
-        # 设置可视化器
+        """使用Open3D隐藏窗口渲染并合成AR视图"""
         if not self.setup_visualizer():
             print("❌ 可视化器初始化失败")
             return
-        
-        print("✅ 可视化器初始化完成")
-        
-        # 创建键盘事件处理
-        key_pressed = [False]  # 用于跟踪按键状态
-        
-        def key_callback(vis, action, mods):
-            """键盘回调函数"""
-            if action == 1:  # 按键按下
-                # 这里Open3D的键盘回调有限，我们使用一个替代方案
-                key_pressed[0] = True
-            return False
-        
-        # 注册键盘回调（如果支持）
-        try:
-            # self.vis.register_key_callback(ord('O'), key_callback)  # Open3D版本问题可能不支持
-            pass
-        except:
-            pass
-        
-        # 创建一个小的OpenCV窗口用于键盘输入检测
-        cv2.namedWindow("Control Panel", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("Control Panel", 300, 100)
-        
-        # 创建控制面板图像
-        control_panel = np.ones((100, 300, 3), dtype=np.uint8) * 50  # 深灰色背景
-        cv2.putText(control_panel, "Press 'o' to toggle background", (10, 30), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-        cv2.putText(control_panel, "Press 'q' to quit", (10, 60), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-        cv2.imshow("Control Panel", control_panel)
+            
+        cv2.namedWindow("AR View", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("AR View", self.render_width, self.render_height)
         
         try:
             while self.is_running:
-                # 处理MediaPipe数据
+                # 读取最新数据
+                frame = None
                 try:
-                    while not self.data_queue.empty():
-                        data_packet = self.data_queue.get_nowait()
-                        
-                        # 更新3D人脸模型
-                        if self.update_face_model(data_packet['detection_result']):
-                            # 更新可视化器中的几何体
-                            self.vis.update_geometry(self.face_mesh)
-                        
-                        # 更新摄像机背景
-                        if 'frame' in data_packet:
-                            self.update_camera_background(data_packet['frame'])
-                        
+                    pkt = self.data_queue.get_nowait()
+                    detection_result = pkt['detection_result']
+                    frame = pkt.get('frame')
                 except queue.Empty:
-                    pass
+                    detection_result = None
                 
-                # 检查键盘输入
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('o') or key == ord('O'):
-                    self.toggle_camera_background()
-                    # 更新控制面板显示
-                    control_panel = np.ones((100, 300, 3), dtype=np.uint8) * 50
-                    cv2.putText(control_panel, "Press 'o' to toggle background", (10, 30), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-                    cv2.putText(control_panel, "Press 'q' to quit", (10, 60), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-                    status = "AR Mode ON" if self.show_camera_background else "3D Mode"
-                    cv2.putText(control_panel, f"Status: {status}", (10, 90), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
-                    cv2.imshow("Control Panel", control_panel)
-                elif key == ord('q') or key == ord('Q'):
-                    break
+                # 更新3D模型
+                if detection_result and self.update_face_model(detection_result):
+                    self.vis.update_geometry(self.face_mesh)
                 
-                # 更新可视化器
-                if not self.vis.poll_events():
-                    break
+                # 离屏渲染获取图像
+                self.vis.poll_events()
                 self.vis.update_renderer()
+                img_3d = np.asarray(self.vis.capture_screen_float_buffer(False))
+                img_3d = (img_3d * 255).astype(np.uint8)
+                img_3d_bgr = cv2.cvtColor(img_3d, cv2.COLOR_RGB2BGR)
                 
-                time.sleep(1.0 / 60)  # 60FPS渲染
+                # 摄像机背景
+                if self.show_camera_background and frame is not None:
+                    bg = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                    bg = cv2.resize(bg, (self.render_width, self.render_height))
+                else:
+                    bg = np.zeros_like(img_3d_bgr)
                 
+                # AR合成：将3D模型叠加到背景上
+                # 创建掩码：非黑色像素的区域
+                mask = img_3d_bgr.sum(axis=2) > 30
+                composite = bg.copy()
+                composite[mask] = img_3d_bgr[mask]
+                
+                # 显示合成结果
+                cv2.imshow("AR View", composite)
+                
+                # 处理按键
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('o'):
+                    self.toggle_camera_background()
+                elif key == ord('q'):
+                    break
+                    
         except KeyboardInterrupt:
             print("\n⏹️ 用户中断")
         finally:
             self.vis.destroy_window()
-            cv2.destroyAllWindows()  # 关闭OpenCV窗口
+            cv2.destroyAllWindows()
     
     def run(self):
         """启动渲染器"""
-        print("\n🚀 启动FaceMatrixLab 3D渲染器（AR增强现实版本）")
+        print("\n启动FaceMatrixLab 3D渲染器（AR增强现实版本）")
         print("=" * 60)
         print("控制说明:")
         print("  O键: 切换摄像机背景显示（AR模式 / 纯3D模式）")
@@ -514,7 +521,7 @@ def main():
     print("=" * 60)
     
     # 检查模型文件
-    model_path = "../obj/Andy_Wah_facemesh.obj"
+    model_path = "obj/Andy_Wah_facemesh.obj"
     if not os.path.exists(model_path):
         print(f"❌ 错误：模型文件不存在 {model_path}")
         print("请确保Andy_Wah_facemesh.obj文件位于 obj/ 目录中")
