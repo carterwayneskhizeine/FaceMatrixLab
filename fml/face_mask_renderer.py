@@ -136,8 +136,12 @@ class FaceMaskRenderer:
                 print("❌ 模型加载失败：没有顶点数据")
                 return False
             
-            # 计算法线
-            self.face_mesh.compute_vertex_normals()
+            # ✅ 仅当 OBJ 没有 vn 记录时才补算法线
+            if len(self.face_mesh.vertex_normals) == 0:
+                self.face_mesh.compute_vertex_normals()
+                print("🔧 OBJ文件没有法线数据，已自动计算")
+            else:
+                print(f"✅ 已读取 {len(self.face_mesh.vertex_normals)} 条加权（平滑）顶点法线")
             
             # 获取顶点信息
             vertices = np.asarray(self.face_mesh.vertices)
@@ -194,8 +198,9 @@ class FaceMaskRenderer:
             else:
                 print("🎨 使用纹理贴图渲染")
             
-            # 备份原始顶点
+            # 备份原始顶点和法线
             self.original_vertices = np.asarray(self.face_mesh.vertices).copy()
+            self.original_normals = np.asarray(self.face_mesh.vertex_normals).copy()
             
             return True
             
@@ -580,9 +585,13 @@ class FaceMaskRenderer:
         # 🆕 保存变换后的顶点供导出使用
         self.current_transformed_vertices = transformed_vertices
         
-        # 更新模型
+        # 更新模型顶点
         self.face_mesh.vertices = o3d.utility.Vector3dVector(transformed_vertices)
-        self.face_mesh.compute_vertex_normals()
+        
+        # 更新法线（只用旋转部分，忽略平移）
+        R = rotation_matrix[:3, :3]  # 3×3 旋转矩阵
+        transformed_normals = (R @ self.original_normals.T).T
+        self.face_mesh.vertex_normals = o3d.utility.Vector3dVector(transformed_normals)
         
         self.frame_count += 1
         if self.frame_count >= 3:
