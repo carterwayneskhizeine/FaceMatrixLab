@@ -427,7 +427,7 @@ class FaceMaskRenderer:
         
         # 转换为模型坐标系（以屏幕中心为原点）
         model_x = (screen_center_x - screen_width/2) * 0.05   
-        model_y = -(screen_center_y - screen_height/2) * 0.05  # Y轴翻转
+        model_y = -(screen_center_y - screen_height/2) * 0.05 + 1.5  # Y轴翻转 + 🔧 向上偏移1.5个单位
         model_z = face_center_z * 30 + 2  # Z轴适当前移
         
         # 调试信息
