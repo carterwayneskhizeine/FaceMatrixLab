@@ -80,17 +80,9 @@ class FaceMaskRenderer:
         # 🆕 新增：原始landmarks显示控制
         self.show_original_landmarks = True  # 显示原始landmarks点和线框
         
-        # 🆕 新增：表情驱动系统
-        self.enable_expression_drive = True  # 启用表情驱动
-        self.show_blendshapes_debug = False  # 显示BlendShapes调试信息
-        self.expression_strength = 1.0       # 表情强度系数
-        
         # 🆕 新增：纹理贴图控制
         self.texture_mode = True             # 优先使用纹理贴图
         self.has_texture = False             # 是否成功加载纹理
-        
-        # 表情驱动相关的顶点组（需要根据具体模型调整）
-        self.setup_expression_vertex_groups()
         
         # 加载3D模型
         if not self.load_face_model():
@@ -98,9 +90,6 @@ class FaceMaskRenderer:
         
         # 🆕 关键：提取模型中4个关键顶点的坐标
         self.extract_model_key_points()
-        
-        # 🆕 自动检测表情顶点组
-        self.auto_detect_expression_vertex_groups()
         
         # 性能统计
         self.fps_counter = 0
@@ -110,98 +99,8 @@ class FaceMaskRenderer:
         print("✅ FaceMatrixLab 3D 面具渲染器初始化完成")
         print(f"📐 宽高比设置: {self.aspect_ratio:.3f} (16:9)")
         print(f"📏 X坐标修正系数: {self.x_scale_factor:.3f}")
-        print(f"🎭 表情驱动: {'启用' if self.enable_expression_drive else '禁用'}")
     
-    def setup_expression_vertex_groups(self):
-        """🆕 设置表情驱动的顶点组"""
-        print("🎭 设置表情驱动顶点组...")
-        
-        # 这里需要根据你的具体模型文件来定义哪些顶点属于嘴巴、眼睛等部位
-        # 以下是示例索引，你需要根据实际模型调整
-        
-        # 嘴巴相关顶点（示例）
-        self.mouth_vertex_indices = list(range(100, 150))  # 需要根据实际模型调整
-        
-        # 左眼相关顶点（示例）
-        self.left_eye_vertex_indices = list(range(200, 230))  # 需要根据实际模型调整
-        
-        # 右眼相关顶点（示例）
-        self.right_eye_vertex_indices = list(range(250, 280))  # 需要根据实际模型调整
-        
-        # 眉毛相关顶点（示例）
-        self.eyebrow_vertex_indices = list(range(300, 350))  # 需要根据实际模型调整
-        
-        print(f"   嘴巴顶点: {len(self.mouth_vertex_indices)} 个")
-        print(f"   左眼顶点: {len(self.left_eye_vertex_indices)} 个")
-        print(f"   右眼顶点: {len(self.right_eye_vertex_indices)} 个")
-        print(f"   眉毛顶点: {len(self.eyebrow_vertex_indices)} 个")
-        
-        # 💡 自动检测顶点组的方法（基于模型几何分析）
-        # 这个方法会在load_face_model()之后调用
-        
-    def auto_detect_expression_vertex_groups(self):
-        """🆕 自动检测表情相关的顶点组（基于几何位置）"""
-        if not hasattr(self, 'original_vertices'):
-            return
-            
-        vertices = self.original_vertices
-        print("🔍 自动检测表情顶点组...")
-        
-        # 计算模型的边界框
-        min_bounds = vertices.min(axis=0)
-        max_bounds = vertices.max(axis=0)
-        center = (min_bounds + max_bounds) / 2
-        
-        # 基于相对位置自动分组
-        mouth_candidates = []
-        left_eye_candidates = []
-        right_eye_candidates = []
-        eyebrow_candidates = []
-        
-        for i, vertex in enumerate(vertices):
-            # 相对于中心的位置
-            rel_pos = vertex - center
-            
-            # 嘴巴区域：下半部分，中央区域
-            if (rel_pos[1] < -10 and  # Y轴负方向（下方）
-                abs(rel_pos[0]) < 30 and  # X轴中央
-                rel_pos[2] > -5):  # Z轴前方
-                mouth_candidates.append(i)
-            
-            # 左眼区域：上方偏左
-            elif (rel_pos[1] > 5 and  # Y轴正方向（上方）
-                  rel_pos[0] < -15 and  # X轴负方向（左侧）
-                  rel_pos[2] > -10):
-                left_eye_candidates.append(i)
-            
-            # 右眼区域：上方偏右  
-            elif (rel_pos[1] > 5 and  # Y轴正方向（上方）
-                  rel_pos[0] > 15 and  # X轴正方向（右侧）
-                  rel_pos[2] > -10):
-                right_eye_candidates.append(i)
-            
-            # 眉毛区域：更上方
-            elif (rel_pos[1] > 20 and  # Y轴更高
-                  abs(rel_pos[0]) < 40 and
-                  rel_pos[2] > -15):
-                eyebrow_candidates.append(i)
-        
-        # 更新顶点组
-        if mouth_candidates:
-            self.mouth_vertex_indices = mouth_candidates
-        if left_eye_candidates:
-            self.left_eye_vertex_indices = left_eye_candidates
-        if right_eye_candidates:
-            self.right_eye_vertex_indices = right_eye_candidates
-        if eyebrow_candidates:
-            self.eyebrow_vertex_indices = eyebrow_candidates
-        
-        print(f"✅ 自动检测完成:")
-        print(f"   嘴巴顶点: {len(self.mouth_vertex_indices)} 个")
-        print(f"   左眼顶点: {len(self.left_eye_vertex_indices)} 个")
-        print(f"   右眼顶点: {len(self.right_eye_vertex_indices)} 个")
-        print(f"   眉毛顶点: {len(self.eyebrow_vertex_indices)} 个")
-    
+
     def download_mediapipe_model(self):
         """下载MediaPipe人脸标志检测模型"""
         model_url = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
@@ -264,7 +163,7 @@ class FaceMaskRenderer:
                     img_array = np.asarray(tex_img)
                     
                     # 上下翻转图像数组
-                    flipped_array = np.flipud(img_array)
+                    flipped_array = np.flipud(img_array).copy()  # 确保数组连续
                     
                     # 转换回Open3D图像格式
                     flipped_tex_img = o3d.geometry.Image(flipped_array)
@@ -350,6 +249,14 @@ class FaceMaskRenderer:
         render_option.mesh_show_back_face = True
         render_option.background_color = np.array([0.0, 0.0, 0.0])  # 黑色背景便于合成
         
+        # 🆕 设置材质粗糙度到最高（降低反射）
+        render_option.light_on = True
+        # 禁用光滑着色，使用更粗糙的效果
+        render_option.mesh_show_wireframe = False
+        render_option.point_show_normal = False
+        
+        print("🎨 材质设置: 最高粗糙度（无反射）")
+        
         # 设置相机视角
         ctr = self.vis.get_view_control()
         ctr.set_zoom(1.0)
@@ -370,13 +277,12 @@ class FaceMaskRenderer:
                 min_face_detection_confidence=0.5,
                 min_face_presence_confidence=0.5,
                 min_tracking_confidence=0.5,
-                output_face_blendshapes=True,  # 🔑 关键：启用BlendShapes输出
+                output_face_blendshapes=False,  # 🔑 关键：禁用BlendShapes输出
                 output_facial_transformation_matrixes=False,  # 🔑 关键：不使用transformation_matrix
             )
             
             landmarker = FaceLandmarker.create_from_options(options)
             print("✅ MediaPipe人脸检测器创建成功")
-            print("🎭 BlendShapes输出已启用")
             return landmarker
             
         except Exception as e:
@@ -674,10 +580,6 @@ class FaceMaskRenderer:
         # 🆕 保存变换后的顶点供导出使用
         self.current_transformed_vertices = transformed_vertices
         
-        # 🆕 新增：应用表情驱动
-        if self.enable_expression_drive:
-            transformed_vertices = self.apply_expression_drive(transformed_vertices, detection_result)
-        
         # 更新模型
         self.face_mesh.vertices = o3d.utility.Vector3dVector(transformed_vertices)
         self.face_mesh.compute_vertex_normals()
@@ -687,111 +589,6 @@ class FaceMaskRenderer:
             self.debug_mode = False
         
         return True
-    
-    def apply_expression_drive(self, vertices, detection_result):
-        """🆕 基于BlendShapes应用表情驱动"""
-        if not detection_result.face_blendshapes or len(detection_result.face_blendshapes) == 0:
-            return vertices
-        
-        # 获取BlendShapes数据
-        blendshapes = detection_result.face_blendshapes[0]
-        
-        # 创建顶点偏移数组
-        vertex_offsets = np.zeros_like(vertices)
-        
-        # 遍历BlendShapes并应用到对应的顶点组
-        for category in blendshapes:
-            category_name = category.category_name
-            score = category.score * self.expression_strength
-            
-            # 只处理有显著影响的BlendShapes
-            if score < 0.1:
-                continue
-            
-            # 🎭 嘴巴相关的BlendShapes
-            if 'mouth' in category_name.lower() or 'jaw' in category_name.lower():
-                self.apply_mouth_blendshapes(vertex_offsets, category_name, score)
-            
-            # 👁️ 眼睛相关的BlendShapes
-            elif 'eye' in category_name.lower() or 'blink' in category_name.lower():
-                self.apply_eye_blendshapes(vertex_offsets, category_name, score)
-            
-            # 🤔 眉毛相关的BlendShapes
-            elif 'brow' in category_name.lower():
-                self.apply_eyebrow_blendshapes(vertex_offsets, category_name, score)
-            
-            # 显示调试信息
-            if self.show_blendshapes_debug and score > 0.2:
-                print(f"   {category_name}: {score:.3f}")
-        
-        # 应用顶点偏移
-        return vertices + vertex_offsets
-    
-    def apply_mouth_blendshapes(self, vertex_offsets, category_name, score):
-        """应用嘴巴相关的BlendShapes"""
-        mouth_indices = self.mouth_vertex_indices
-        
-        if 'open' in category_name.lower() or 'jaw' in category_name.lower():
-            # 嘴巴张开：下巴向下移动
-            for idx in mouth_indices:
-                if idx < len(vertex_offsets):
-                    vertex_offsets[idx, 1] -= score * 3.0  # Y轴向下
-        
-        elif 'smile' in category_name.lower():
-            # 微笑：嘴角向上向外
-            for idx in mouth_indices:
-                if idx < len(vertex_offsets):
-                    vertex_offsets[idx, 1] += score * 1.5  # Y轴向上
-                    vertex_offsets[idx, 0] += score * 1.0 * np.sign(vertex_offsets[idx, 0])  # X轴向外
-        
-        elif 'pucker' in category_name.lower():
-            # 撅嘴：嘴部向前
-            for idx in mouth_indices:
-                if idx < len(vertex_offsets):
-                    vertex_offsets[idx, 2] += score * 2.0  # Z轴向前
-    
-    def apply_eye_blendshapes(self, vertex_offsets, category_name, score):
-        """应用眼睛相关的BlendShapes"""
-        if 'left' in category_name.lower():
-            eye_indices = self.left_eye_vertex_indices
-        elif 'right' in category_name.lower():
-            eye_indices = self.right_eye_vertex_indices
-        else:
-            # 双眼
-            eye_indices = self.left_eye_vertex_indices + self.right_eye_vertex_indices
-        
-        if 'blink' in category_name.lower() or 'close' in category_name.lower():
-            # 眨眼：眼皮向内收缩
-            for idx in eye_indices:
-                if idx < len(vertex_offsets):
-                    vertex_offsets[idx, 1] -= score * 1.0  # Y轴向内
-        
-        elif 'wide' in category_name.lower():
-            # 眼睛睁大：向外扩张
-            for idx in eye_indices:
-                if idx < len(vertex_offsets):
-                    vertex_offsets[idx, 1] += score * 0.8  # Y轴向外
-    
-    def apply_eyebrow_blendshapes(self, vertex_offsets, category_name, score):
-        """应用眉毛相关的BlendShapes"""
-        if 'left' in category_name.lower():
-            brow_indices = self.eyebrow_vertex_indices[:len(self.eyebrow_vertex_indices)//2]
-        elif 'right' in category_name.lower():
-            brow_indices = self.eyebrow_vertex_indices[len(self.eyebrow_vertex_indices)//2:]
-        else:
-            brow_indices = self.eyebrow_vertex_indices
-        
-        if 'up' in category_name.lower() or 'raise' in category_name.lower():
-            # 眉毛上扬
-            for idx in brow_indices:
-                if idx < len(vertex_offsets):
-                    vertex_offsets[idx, 1] += score * 2.0  # Y轴向上
-        
-        elif 'down' in category_name.lower() or 'frown' in category_name.lower():
-            # 眉毛下皱
-            for idx in brow_indices:
-                if idx < len(vertex_offsets):
-                    vertex_offsets[idx, 1] -= score * 1.5  # Y轴向下
     
     def draw_original_landmarks(self, image, detection_result):
         """🆕 新增：绘制原始landmarks点和线框"""
@@ -925,13 +722,13 @@ class FaceMaskRenderer:
         print(f"   左脸颊: 索引 {self.left_cheek_index}")
         print(f"   下巴: 索引 {self.chin_index}")
         print(f"   右脸颊: 索引 {self.right_cheek_index}")
-        print("🚀 新增功能:")
+        print("🚀 功能特性:")
         print("   ✅ 动态缩放：模型尺寸跟随人脸大小")
         print("   ✅ 头部旋转：Roll、Pitch、Yaw三轴旋转")
         print("   ✅ 完整变换：平移+旋转+缩放 (TRS)")
         print("   ✅ 16:9宽高比修正：正确处理1280x720分辨率")
         print("   ✅ 原始landmarks显示：绿色线框和关键点")
-        print("   ✅ 表情驱动：基于BlendShapes的表情系统")
+        print("   ✅ 纹理贴图支持：enhanced_texture.png")
         print("=" * 60)
         print("控制说明:")
         print("  B键: 切换摄像机背景显示")
@@ -939,9 +736,6 @@ class FaceMaskRenderer:
         print("  1-6键: 直接选择面具颜色")
         print("  T键: 切换纹理贴图/统一颜色模式")
         print("  L键: 切换原始landmarks显示")
-        print("  F键: 切换表情驱动功能")
-        print("  D键: 切换BlendShapes调试信息")
-        print("  +/-键: 调节表情强度 (0.0-3.0)")
         print("  E键: 导出当前实时3D模型为OBJ文件")
         print("  Q键: 退出程序")
         print("=" * 60)
@@ -1027,20 +821,10 @@ class FaceMaskRenderer:
                     cv2.putText(composite, landmarks_status, (10, 190), 
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
                     
-                    # 🆕 显示表情驱动状态
-                    expression_status = f"表情驱动: {'启用' if self.enable_expression_drive else '禁用'} (F键切换)"
-                    cv2.putText(composite, expression_status, (10, 230), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 2)
-                    
-                    # 显示表情强度
-                    strength_status = f"表情强度: {self.expression_strength:.1f} (+-键调节)"
-                    cv2.putText(composite, strength_status, (10, 270), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 2)
-                    
                     # 🆕 显示纹理状态
                     if hasattr(self, 'has_texture') and self.has_texture:
                         texture_status = f"渲染模式: {'纹理贴图' if self.texture_mode else '统一颜色'} (T键切换)"
-                        cv2.putText(composite, texture_status, (10, 310), 
+                        cv2.putText(composite, texture_status, (10, 230), 
                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
                     
                     # 显示AR合成结果
@@ -1067,22 +851,6 @@ class FaceMaskRenderer:
                     # 🆕 新增：切换原始landmarks显示
                     self.show_original_landmarks = not self.show_original_landmarks
                     print(f"原始landmarks显示: {'开启' if self.show_original_landmarks else '关闭'}")
-                elif key == ord('f'):
-                    # 🆕 新增：切换表情驱动
-                    self.enable_expression_drive = not self.enable_expression_drive
-                    print(f"表情驱动: {'启用' if self.enable_expression_drive else '禁用'}")
-                elif key == ord('d'):
-                    # 🆕 新增：切换BlendShapes调试信息
-                    self.show_blendshapes_debug = not self.show_blendshapes_debug
-                    print(f"BlendShapes调试: {'显示' if self.show_blendshapes_debug else '隐藏'}")
-                elif key == ord('+') or key == ord('='):
-                    # 增加表情强度
-                    self.expression_strength = min(self.expression_strength + 0.1, 3.0)
-                    print(f"表情强度: {self.expression_strength:.1f}")
-                elif key == ord('-'):
-                    # 减少表情强度
-                    self.expression_strength = max(self.expression_strength - 0.1, 0.0)
-                    print(f"表情强度: {self.expression_strength:.1f}")
                 elif key == ord('t'):
                     # 🆕 新增：切换纹理/颜色模式
                     self.toggle_texture_mode()
