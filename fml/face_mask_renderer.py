@@ -15,6 +15,8 @@ import os
 import threading
 import queue
 import open3d as o3d
+import json
+from datetime import datetime
 
 # MediaPipe 导入
 BaseOptions = mp.tasks.BaseOptions
@@ -44,6 +46,12 @@ class FaceMaskRenderer:
         self.aspect_ratio = self.camera_width / self.camera_height
         # 🔧 恢复：重新启用x_scale_factor用于宽高比修正
         self.x_scale_factor = self.aspect_ratio / 1.0  # 对于16:9，约为1.777
+        
+        # 🆕 新增：相机跟随功能参数
+        self.enable_camera_following = True  # 启用相机跟随人脸
+        self.camera_follow_smoothing = 0.3   # 相机跟随平滑系数 (0-1, 越小越平滑)
+        self.current_camera_offset_x = 0.0   # 当前相机X轴偏移
+        self.target_camera_offset_x = 0.0    # 目标相机X轴偏移
         
         # MediaPipe 相关
         self.landmarker = None
@@ -78,15 +86,18 @@ class FaceMaskRenderer:
         self.debug_mode = True
         self.frame_count = 0
         
-        # 🆕 新增：平滑相机移动系数
-        self.camera_x_smoothing = 1.0  # 线性插值系数，值越小越平滑
-        
         # 🆕 新增：原始landmarks显示控制
         self.show_original_landmarks = True  # 显示原始landmarks点和线框
         
         # 🆕 新增：纹理贴图控制
         self.texture_mode = True             # 优先使用纹理贴图
         self.has_texture = False             # 是否成功加载纹理
+        
+        # 🆕 新增：数据保存功能
+        self.save_frame_counter = 0          # 保存用的帧计数器
+        self.save_interval = 30              # 每30帧保存一次
+        self.save_directory = "pos_param_rec"  # 保存目录
+        self.create_save_directory()         # 创建保存目录
         
         # 加载3D模型
         if not self.load_face_model():
@@ -103,6 +114,122 @@ class FaceMaskRenderer:
         print("✅ FaceMatrixLab 3D 面具渲染器初始化完成")
         print(f"📐 宽高比设置: {self.aspect_ratio:.3f} (16:9)")
         print(f"📏 X坐标修正系数: {self.x_scale_factor:.3f}")
+        print(f"📹 相机跟随功能: {'启用' if self.enable_camera_following else '禁用'}")
+        print(f"🎛️ 相机平滑系数: {self.camera_follow_smoothing:.1f}")
+    
+    def create_save_directory(self):
+        """创建数据保存目录"""
+        if not os.path.exists(self.save_directory):
+            os.makedirs(self.save_directory)
+            print(f"📁 创建数据保存目录: {self.save_directory}")
+        else:
+            print(f"📁 数据保存目录已存在: {self.save_directory}")
+    
+    def save_position_data(self, landmarks, camera_position):
+        """保存landmarks位置和相机位置数据"""
+        try:
+            # 准备数据
+            data = {
+                'timestamp': datetime.now().isoformat(),
+                'frame_count': self.save_frame_counter,
+                'screen_resolution': {
+                    'width': self.render_width,
+                    'height': self.render_height
+                },
+                'original_landmarks': [],
+                'pixel_landmarks': [],
+                'camera_position': camera_position,
+                'camera_settings': {
+                    'camera_following_enabled': self.enable_camera_following,
+                    'camera_offset_x': self.current_camera_offset_x,
+                    'camera_smoothing': self.camera_follow_smoothing
+                }
+            }
+            
+            # 保存原始landmarks（归一化坐标）和像素坐标
+            for i, lm in enumerate(landmarks):
+                # 原始归一化坐标 (0-1范围) - 添加xyz前缀
+                original_coord = {
+                    f'x_{i:03d}': float(lm.x),
+                    f'y_{i:03d}': float(lm.y), 
+                    f'z_{i:03d}': float(lm.z)
+                }
+                data['original_landmarks'].append(original_coord)
+                
+                # 转换为像素坐标 (0-1279, 0-719范围) - 添加xyz前缀
+                pixel_coord = self._lm_to_pixel(lm, mirror=False)
+                pixel_data = {
+                    f'x_{i:03d}': float(pixel_coord[0]),
+                    f'y_{i:03d}': float(pixel_coord[1]),
+                    f'z_{i:03d}': float(pixel_coord[2])
+                }
+                data['pixel_landmarks'].append(pixel_data)
+            
+            # 保存到文件 (每30帧保存一个独立文件)
+            filename = f"landmarks_frame_{self.save_frame_counter:06d}.json"
+            save_path = os.path.join(self.save_directory, filename)
+            with open(save_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            
+            print(f"💾 已保存位置数据 (第{self.save_frame_counter}帧): {filename}")
+            
+        except Exception as e:
+            print(f"❌ 保存位置数据失败: {e}")
+    
+    def get_camera_position(self):
+        """获取虚拟摄像机的当前位置参数"""
+        try:
+            if hasattr(self, 'vis') and self.vis is not None:
+                # 获取相机参数
+                ctr = self.vis.get_view_control()
+                camera_params = ctr.convert_to_pinhole_camera_parameters()
+                
+                # 提取相机位置信息
+                extrinsic = camera_params.extrinsic
+                intrinsic = camera_params.intrinsic
+                
+                # 相机位置：从外参矩阵提取平移向量
+                camera_translation = extrinsic[:3, 3]
+                
+                # 相机旋转：从外参矩阵提取旋转矩阵
+                camera_rotation = extrinsic[:3, :3]
+                
+                # 内参参数
+                intrinsic_matrix = intrinsic.intrinsic_matrix
+                
+                camera_data = {
+                    'translation': {
+                        'x': float(camera_translation[0]),
+                        'y': float(camera_translation[1]),
+                        'z': float(camera_translation[2])
+                    },
+                    'rotation_matrix': camera_rotation.tolist(),
+                    'intrinsic': {
+                        'fx': float(intrinsic_matrix[0, 0]),
+                        'fy': float(intrinsic_matrix[1, 1]),
+                        'cx': float(intrinsic_matrix[0, 2]),
+                        'cy': float(intrinsic_matrix[1, 2]),
+                        'width': int(intrinsic.width),
+                        'height': int(intrinsic.height)
+                    },
+                    'custom_offset_x': self.current_camera_offset_x,
+                    'target_offset_x': self.target_camera_offset_x
+                }
+                
+                return camera_data
+            else:
+                return {
+                    'error': 'Visualizer not available',
+                    'custom_offset_x': self.current_camera_offset_x,
+                    'target_offset_x': self.target_camera_offset_x
+                }
+                
+        except Exception as e:
+            return {
+                'error': f'Failed to get camera position: {e}',
+                'custom_offset_x': getattr(self, 'current_camera_offset_x', 0.0),
+                'target_offset_x': getattr(self, 'target_camera_offset_x', 0.0)
+            }
     
     def _lm_to_pixel(self, lm, mirror=True):
         """MediaPipe 归一化 landmark → 1280×720 像素坐标"""
@@ -231,9 +358,9 @@ class FaceMaskRenderer:
             # 🔧 修改：只有在没有纹理时才应用统一颜色
             if not hasattr(self, 'has_texture') or not self.has_texture:
                 self.face_mesh.paint_uniform_color(self.current_mask_color)
-                print(f"🎭 面具颜色已更改为索引 {color_index}")
+                print(f"🎭 Mask color changed to index {color_index}")
             else:
-                print(f"🎨 当前使用纹理贴图，颜色切换已禁用")
+                print(f"🎨 Currently using texture mapping, color switching disabled")
             return True
         return False
     
@@ -243,15 +370,15 @@ class FaceMaskRenderer:
             self.texture_mode = not self.texture_mode
             
             if self.texture_mode:
-                print("🎨 切换到纹理贴图模式")
+                print("🎨 Switched to texture mapping mode")
                 # 清除顶点颜色，恢复纹理
                 self.face_mesh.vertex_colors = o3d.utility.Vector3dVector([])
             else:
-                print("🎨 切换到统一颜色模式")
+                print("🎨 Switched to uniform color mode")
                 # 应用统一颜色
                 self.face_mesh.paint_uniform_color(self.current_mask_color)
         else:
-            print("⚠️ 没有可用的纹理贴图，无法切换")
+            print("⚠️ No texture available, cannot switch")
     
     def setup_visualizer(self):
         """设置Open3D可视化器"""
@@ -408,40 +535,6 @@ class FaceMaskRenderer:
             print(f"❌ 模型关键点提取失败: {e}")
             return False
     
-    def _follow_face_horizontally(self, model_offset_x):
-        """🆕 新增：让3D相机在水平方向上平滑跟随人脸中心"""
-        try:
-            # 获取视图控制器和相机参数
-            ctr = self.vis.get_view_control()
-            cam = ctr.convert_to_pinhole_camera_parameters()
-
-            # 关键：创建可写副本以修改
-            extrinsic = cam.extrinsic.copy()
-
-            # 目标：我们希望相机移动到 model_offset_x 的位置。
-            # 在Open3D的视图矩阵(extrinsic)中，平移分量是相机位置的负值。
-            # 所以，要让相机移动到 +X 的位置，视图矩阵的X平移需要是 -X。
-            # 修正：为了让模型在屏幕上看起来移动了 model_offset_x，相机需要反向移动。
-            # 即 Camera.x = -model_offset_x。
-            # 而 extrinsic[0,3] = -Camera.x，所以 extrinsic[0,3] = -(-model_offset_x) = model_offset_x。
-            target_cam_x = model_offset_x
-
-            # 使用线性插值(Lerp)实现平滑移动
-            current_cam_x = extrinsic[0, 3]
-            smoothed_cam_x = current_cam_x + self.camera_x_smoothing * (target_cam_x - current_cam_x)
-            
-            # 更新视图矩阵的X平移分量
-            extrinsic[0, 3] = smoothed_cam_x
-            
-            # 将修改后的参数应用回相机
-            cam.extrinsic = extrinsic
-            ctr.convert_from_pinhole_camera_parameters(cam, allow_arbitrary=True)
-
-        except Exception as e:
-            # 在主循环中，我们不希望因为这个错误中断渲染
-            if self.frame_count < 10: # 仅在初始几帧打印错误
-                print(f"⚠️ 水平跟随相机时出错: {e}")
-
     def update_face_model(self, detection_result):
         """🔑 关键：基于4个landmarks点的屏幕位置计算旋转缩放移动"""
         if not detection_result.face_landmarks or len(detection_result.face_landmarks) == 0:
@@ -455,16 +548,14 @@ class FaceMaskRenderer:
             print(f"⚠️ 关键点数量不足: {len(landmarks)}, 期望468个")
             return False
         
-        # 🆕 新增：获取所有468个点的像素坐标，用于计算精确的面部中心
-        all_landmarks_px = np.array([self._lm_to_pixel(lm, mirror=False) for lm in landmarks])
-        
-        # 提取X坐标并计算最左和最右点的平均值
-        x_coords = all_landmarks_px[:, 0]
-        face_center_x_precise = (np.min(x_coords) + np.max(x_coords)) / 2.0
+        # 🆕 新增：计算人脸水平中心并更新相机位置
+        face_center_data = self.calculate_face_horizontal_center(landmarks)
+        if face_center_data:
+            self.update_camera_position(face_center_data)
         
         # 🔑 提取4个特定关键点 (NormalizedLandmark类型)
         forehead = landmarks[self.forehead_index]      # 额头: 10
-        left_cheek = landmarks[self.left_cheek_index]  # 左脸颊: 234
+        left_cheek = landmarks[self.left_cheek_index]  # 左脸颊: 234  
         chin = landmarks[self.chin_index]              # 下巴: 152
         right_cheek = landmarks[self.right_cheek_index] # 右脸颊: 454
         
@@ -517,7 +608,7 @@ class FaceMaskRenderer:
         
         # 🔧 计算面部中心像素坐标
         face_center_px = np.array([
-            (left_px[0] + right_px[0]) * 0.5,          # X 取左右脸颊中点 (用于旧计算)
+            (left_px[0] + right_px[0]) * 0.5,          # X 取左右脸颊中点
             (forehead_px[1] + chin_px[1]) * 0.5,       # Y 取额头/下巴中点
             (forehead_px[2] + left_px[2] + chin_px[2] + right_px[2]) / 4  # Z取四点平均
         ], dtype=np.float32)
@@ -581,8 +672,8 @@ class FaceMaskRenderer:
         yaw_angle = np.arctan2(z_diff, face_width) * 2.0 + x_offset * 0.5  # 🔧 增强敏感度
         
         # 4. 🔧 修改：使用像素坐标计算平移量，但考虑宽高比修正
-        # 🆕 使用我们精确计算的面部中心X坐标
-        face_center_pixel_x = face_center_x_precise
+        # 计算面部中心的像素坐标
+        face_center_pixel_x = face_center_px[0]
         face_center_pixel_y = face_center_px[1]
         
         # 🔧 关键修正：对X坐标应用宽高比修正，使其在正确的比例下计算偏移
@@ -599,9 +690,6 @@ class FaceMaskRenderer:
         model_y = -(corrected_screen_y - self.render_height * 0.5) * 0.05  # Y轴翻转 + 向上偏移1.5个单位 + 1.5
         model_z = face_center_px[2] * 30 + 2  # Z轴适当前移
         
-        # 🆕 关键：将计算出的X偏移量用于移动相机，而不是模型
-        self._follow_face_horizontally(model_x)
-
         # 调试信息
         if self.debug_mode and self.frame_count < 3:
             print(f"检测到的面部尺寸: 宽度={face_width:.4f}, 高度={face_height:.4f}")
@@ -614,8 +702,7 @@ class FaceMaskRenderer:
             print(f"旋转角度: Roll={np.degrees(roll_angle):.1f}°, Pitch={np.degrees(pitch_angle):.1f}°, Yaw={np.degrees(yaw_angle):.1f}°")
             print(f"归一化面部中心: ({face_center_x:.4f}, {face_center_y:.4f}, {face_center_z:.4f})")
             print(f"像素面部中心: ({face_center_px[0]:.1f}, {face_center_px[1]:.1f})")
-            print(f"精确像素面部X中心: {face_center_x_precise:.1f}")
-            print(f"模型坐标: (X={model_x:.2f} -> to cam), (Y={model_y:.2f}), (Z={model_z:.2f})")
+            print(f"模型坐标: ({model_x:.2f}, {model_y:.2f}, {model_z:.2f})")
         
         # 5. 构建变换矩阵：平移 + 旋转 + 缩放 (TRS变换)
         
@@ -658,8 +745,7 @@ class FaceMaskRenderer:
         
         # 平移矩阵
         translation_matrix = np.eye(4)
-        # 🆕 关键：不再对模型进行水平平移，将其交给相机处理
-        translation_matrix[0, 3] = 0.0 # model_x
+        translation_matrix[0, 3] = model_x
         translation_matrix[1, 3] = model_y
         translation_matrix[2, 3] = model_z
         
@@ -670,9 +756,6 @@ class FaceMaskRenderer:
         self.current_transform_matrix = transform_matrix
         
         if self.debug_mode and self.frame_count < 3:
-            # 增加调试信息
-            print(f"精确的面部中心X像素坐标: {face_center_x_precise:.2f}")
-            print(f"计算出的模型X偏移(传递给相机): {model_x:.4f}")
             print(f"变换矩阵:\n{transform_matrix}")
         
         # 应用变换到模型顶点
@@ -690,6 +773,14 @@ class FaceMaskRenderer:
         R = rotation_matrix[:3, :3]  # 3×3 旋转矩阵
         transformed_normals = (R @ self.original_normals.T).T
         self.face_mesh.vertex_normals = o3d.utility.Vector3dVector(transformed_normals)
+        
+        # 🆕 新增：每30帧保存一次位置数据
+        self.save_frame_counter += 1
+        if self.save_frame_counter % self.save_interval == 0:
+            # 获取虚拟摄像机位置
+            camera_position = self.get_camera_position()
+            # 保存数据
+            self.save_position_data(landmarks, camera_position)
         
         self.frame_count += 1
         if self.frame_count >= 3:
@@ -832,6 +923,8 @@ class FaceMaskRenderer:
         print("   ✅ 16:9宽高比修正：正确处理1280x720分辨率")
         print("   ✅ 原始landmarks显示：绿色线框和关键点")
         print("   ✅ 纹理贴图支持：enhanced_texture.png")
+        print("   ✅ 数据记录：每30帧自动保存landmarks和相机位置数据")
+        print(f"📁 数据保存目录: {self.save_directory}/landmarks_frame_XXXXXX.json")
         print("=" * 60)
         print("控制说明:")
         print("  B键: 切换摄像机背景显示")
@@ -839,6 +932,7 @@ class FaceMaskRenderer:
         print("  1-6键: 直接选择面具颜色")
         print("  T键: 切换纹理贴图/统一颜色模式")
         print("  L键: 切换原始landmarks显示")
+        print("  F键: 切换相机跟随功能")
         print("  E键: 导出当前实时3D模型为OBJ文件")
         print("  Q键: 退出程序")
         print("=" * 60)
@@ -907,9 +1001,9 @@ class FaceMaskRenderer:
                     
                     # 添加信息显示
                     fps_text = f"FPS: {self.current_fps:.1f}"
-                    mask_text = f"面具颜色: {self.current_color_index+1}/{len(self.mask_colors)}"
-                    landmarks_text = "faceLandmarks: 468点跟踪"
-                    ratio_text = f"宽高比: {self.aspect_ratio:.3f} (16:9修正)"
+                    mask_text = f"Mask Color: {self.current_color_index+1}/{len(self.mask_colors)}"
+                    landmarks_text = "FaceLandmarks: 468 points tracking"
+                    ratio_text = f"Aspect Ratio: {self.aspect_ratio:.3f} (16:9 corrected)"
                     cv2.putText(composite, fps_text, (10, 30), 
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                     cv2.putText(composite, mask_text, (10, 70), 
@@ -920,15 +1014,26 @@ class FaceMaskRenderer:
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
                     
                     # 显示原始landmarks状态
-                    landmarks_status = f"原始landmarks: {'显示' if self.show_original_landmarks else '隐藏'} (L键切换)"
+                    landmarks_status = f"Original Landmarks: {'ON' if self.show_original_landmarks else 'OFF'} (Press L)"
                     cv2.putText(composite, landmarks_status, (10, 190), 
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
                     
                     # 🆕 显示纹理状态
                     if hasattr(self, 'has_texture') and self.has_texture:
-                        texture_status = f"渲染模式: {'纹理贴图' if self.texture_mode else '统一颜色'} (T键切换)"
+                        texture_status = f"Render Mode: {'Texture' if self.texture_mode else 'Color'} (Press T)"
                         cv2.putText(composite, texture_status, (10, 230), 
                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                    
+                    # 🆕 显示相机跟随状态
+                    camera_follow_status = f"Camera Follow: {'ON' if self.enable_camera_following else 'OFF'} (Press F)"
+                    cv2.putText(composite, camera_follow_status, (10, 270), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 2)
+                    
+                    # 🆕 显示相机偏移量（仅在启用跟随时）
+                    if self.enable_camera_following:
+                        offset_status = f"Camera Offset: {self.current_camera_offset_x:.2f}"
+                        cv2.putText(composite, offset_status, (10, 310), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 2)
                     
                     # 显示AR合成结果
                     cv2.imshow("AR Face Mask", composite)
@@ -940,7 +1045,7 @@ class FaceMaskRenderer:
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('b'):
                     self.show_camera_background = not self.show_camera_background
-                    print(f"背景显示: {'开启' if self.show_camera_background else '关闭'}")
+                    print(f"Background Display: {'ON' if self.show_camera_background else 'OFF'}")
                 elif key == ord('c'):
                     # 循环切换下一个面具颜色
                     next_color = (self.current_color_index + 1) % len(self.mask_colors)
@@ -953,17 +1058,34 @@ class FaceMaskRenderer:
                 elif key == ord('l'):
                     # 🆕 新增：切换原始landmarks显示
                     self.show_original_landmarks = not self.show_original_landmarks
-                    print(f"原始landmarks显示: {'开启' if self.show_original_landmarks else '关闭'}")
+                    print(f"Original Landmarks Display: {'ON' if self.show_original_landmarks else 'OFF'}")
                 elif key == ord('t'):
                     # 🆕 新增：切换纹理/颜色模式
                     self.toggle_texture_mode()
+                elif key == ord('f'):
+                    # 🆕 新增：切换相机跟随功能
+                    self.enable_camera_following = not self.enable_camera_following
+                    status = "ENABLED" if self.enable_camera_following else "DISABLED"
+                    print(f"📹 Camera Following: {status}")
+                    
+                    # 如果禁用了相机跟随，将相机位置重置到中心
+                    if not self.enable_camera_following:
+                        self.current_camera_offset_x = 0.0
+                        self.target_camera_offset_x = 0.0
+                        ctr = self.vis.get_view_control()
+                        camera_params = ctr.convert_to_pinhole_camera_parameters()
+                        new_extrinsic = camera_params.extrinsic.copy()
+                        new_extrinsic[0, 3] = 0.0  # 重置X偏移
+                        camera_params.extrinsic = new_extrinsic
+                        ctr.convert_from_pinhole_camera_parameters(camera_params)
+                        print("📹 Camera position reset to center")
                 elif key == ord('e'):
                     # 🆕 新增：导出当前实时3D模型
                     exported_file = self.export_realtime_model()
                     if exported_file:
-                        print(f"🎉 实时3D模型已导出，可在Blender中查看: {exported_file}")
+                        print(f"🎉 Real-time 3D model exported, can be viewed in Blender: {exported_file}")
                     else:
-                        print("❌ 导出失败，请确保有检测到的人脸")
+                        print("❌ Export failed, please ensure face is detected")
                 elif key == ord('q'):
                     break
                 
@@ -986,6 +1108,101 @@ class FaceMaskRenderer:
         self.vis.destroy_window()
         cv2.destroyAllWindows()
         print("✅ 资源清理完成")
+
+    def calculate_face_horizontal_center(self, landmarks):
+        """
+        🆕 新增：计算人脸的水平中心位置
+        基于所有468个landmarks点的屏幕像素坐标
+        """
+        if not landmarks or len(landmarks) < 468:
+            return None
+        
+        # 将所有landmarks转换为像素坐标
+        pixel_coords = []
+        for lm in landmarks:
+            px_coord = self._lm_to_pixel(lm, mirror=False)
+            pixel_coords.append(px_coord[:2])  # 只取x, y坐标
+        
+        pixel_coords = np.array(pixel_coords)
+        
+        # 找到最左和最右的点
+        leftmost_x = np.min(pixel_coords[:, 0])
+        rightmost_x = np.max(pixel_coords[:, 0])
+        
+        # 计算水平中心
+        horizontal_center = (leftmost_x + rightmost_x) / 2.0
+        
+        # 计算相对于屏幕中心的偏移（像素单位）
+        screen_center_x = self.render_width / 2.0
+        offset_pixels = horizontal_center - screen_center_x
+        
+        # 转换为归一化偏移 (-1 到 1)
+        normalized_offset = offset_pixels / (self.render_width / 2.0)
+        
+        if self.debug_mode and self.frame_count < 5:
+            print(f"🎯 人脸水平中心计算:")
+            print(f"   最左点X: {leftmost_x:.1f}px")
+            print(f"   最右点X: {rightmost_x:.1f}px") 
+            print(f"   水平中心: {horizontal_center:.1f}px")
+            print(f"   屏幕中心: {screen_center_x:.1f}px")
+            print(f"   像素偏移: {offset_pixels:.1f}px")
+            print(f"   归一化偏移: {normalized_offset:.3f}")
+        
+        return {
+            'horizontal_center_px': horizontal_center,
+            'offset_pixels': offset_pixels,
+            'normalized_offset': normalized_offset,
+            'leftmost_x': leftmost_x,
+            'rightmost_x': rightmost_x
+        }
+    
+    def update_camera_position(self, face_center_data):
+        """
+        🆕 新增：更新3D相机位置以跟随人脸水平中心
+        """
+        if not face_center_data or not self.enable_camera_following:
+            return
+        
+        # 计算目标相机偏移量
+        # 使用归一化偏移量来计算相机的横向移动
+        normalized_offset = face_center_data['normalized_offset']
+        
+        # 设置相机移动的敏感度和限制
+        camera_sensitivity = 2.0  # 相机移动敏感度
+        max_camera_offset = 5.0   # 最大相机偏移量
+        
+        # 计算目标偏移量
+        self.target_camera_offset_x = np.clip(
+            normalized_offset * camera_sensitivity, 
+            -max_camera_offset, 
+            max_camera_offset
+        )
+        
+        # 平滑移动到目标位置
+        self.current_camera_offset_x += (
+            self.target_camera_offset_x - self.current_camera_offset_x
+        ) * self.camera_follow_smoothing
+        
+        # 更新Open3D相机视角
+        ctr = self.vis.get_view_control()
+        
+        # 获取当前相机参数
+        camera_params = ctr.convert_to_pinhole_camera_parameters()
+        
+        # 修改相机的外参矩阵以实现横向移动
+        # 创建新的外参矩阵（因为原矩阵是只读的）
+        new_extrinsic = camera_params.extrinsic.copy()
+        new_extrinsic[0, 3] = self.current_camera_offset_x  # X轴平移
+        camera_params.extrinsic = new_extrinsic
+        
+        # 应用新的相机参数
+        ctr.convert_from_pinhole_camera_parameters(camera_params)
+        
+        if self.debug_mode and self.frame_count < 5:
+            print(f"📹 相机位置更新:")
+            print(f"   目标偏移: {self.target_camera_offset_x:.3f}")
+            print(f"   当前偏移: {self.current_camera_offset_x:.3f}")
+            print(f"   敏感度: {camera_sensitivity}")
 
 
 def main():
