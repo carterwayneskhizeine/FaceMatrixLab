@@ -42,6 +42,7 @@ class FaceMaskRenderer:
         self.camera_width = 1280   # 摄像头分辨率
         self.camera_height = 720   # 摄像头分辨率  
         self.aspect_ratio = self.camera_width / self.camera_height
+        # 🔧 恢复：重新启用x_scale_factor用于宽高比修正
         self.x_scale_factor = self.aspect_ratio / 1.0  # 对于16:9，约为1.777
         
         # MediaPipe 相关
@@ -100,7 +101,17 @@ class FaceMaskRenderer:
         print(f"📐 宽高比设置: {self.aspect_ratio:.3f} (16:9)")
         print(f"📏 X坐标修正系数: {self.x_scale_factor:.3f}")
     
-
+    def _lm_to_pixel(self, lm, mirror=True):
+        """MediaPipe 归一化 landmark → 1280×720 像素坐标"""
+        # 直接转换到像素坐标，不做额外的比例修正
+        x = lm.x * self.render_width
+        y = lm.y * self.render_height
+        
+        if mirror:  # 水平翻转（摄像头镜像效果）
+            x = self.render_width - 1 - x
+            
+        return np.array([x, y, lm.z], dtype=np.float32)
+    
     def download_mediapipe_model(self):
         """下载MediaPipe人脸标志检测模型"""
         model_url = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
@@ -413,7 +424,13 @@ class FaceMaskRenderer:
         chin = landmarks[self.chin_index]              # 下巴: 152
         right_cheek = landmarks[self.right_cheek_index] # 右脸颊: 454
         
-        # 转换为numpy数组 (归一化坐标 [0,1])
+        # 🔧 修改：使用像素坐标替代归一化坐标，不使用镜像
+        forehead_px = self._lm_to_pixel(forehead, mirror=False)
+        left_px = self._lm_to_pixel(left_cheek, mirror=False)
+        chin_px = self._lm_to_pixel(chin, mirror=False)
+        right_px = self._lm_to_pixel(right_cheek, mirror=False)
+        
+        # 保留原始归一化坐标用于计算旋转角度等
         forehead_point = np.array([forehead.x, forehead.y, forehead.z])
         left_cheek_point = np.array([left_cheek.x, left_cheek.y, left_cheek.z])
         chin_point = np.array([chin.x, chin.y, chin.z])
@@ -435,6 +452,11 @@ class FaceMaskRenderer:
             print(f"  左脸颊[{self.left_cheek_index}]: {left_cheek_point}")
             print(f"  下巴[{self.chin_index}]: {chin_point}")
             print(f"  右脸颊[{self.right_cheek_index}]: {right_cheek_point}")
+            print(f"像素坐标:")
+            print(f"  额头[{self.forehead_index}]: {forehead_px}")
+            print(f"  左脸颊[{self.left_cheek_index}]: {left_px}")
+            print(f"  下巴[{self.chin_index}]: {chin_px}")
+            print(f"  右脸颊[{self.right_cheek_index}]: {right_px}")
         
         # 🎯 基于4个landmarks点计算变换参数
         
@@ -444,6 +466,17 @@ class FaceMaskRenderer:
         face_center_x = (left_cheek_point[0] + right_cheek_point[0]) / 2
         face_center_y = (forehead_point[1] + chin_point[1]) / 2
         face_center_z = (forehead_point[2] + left_cheek_point[2] + chin_point[2] + right_cheek_point[2]) / 4
+        
+        # 🔧 新增：基于像素计算面部尺寸
+        face_width_px = np.linalg.norm(right_px[:2] - left_px[:2])   # 像素
+        face_height_px = abs(chin_px[1] - forehead_px[1])             # 像素
+        
+        # 🔧 计算面部中心像素坐标
+        face_center_px = np.array([
+            (left_px[0] + right_px[0]) * 0.5,          # X 取左右脸颊中点
+            (forehead_px[1] + chin_px[1]) * 0.5,       # Y 取额头/下巴中点
+            (forehead_px[2] + left_px[2] + chin_px[2] + right_px[2]) / 4  # Z取四点平均
+        ], dtype=np.float32)
         
         # 2. 🔑 核心：基于landmarks点间距计算缩放
         # 从模型中获取对应4个点的距离作为参考
@@ -461,6 +494,12 @@ class FaceMaskRenderer:
         # 基于实际检测尺寸与标准尺寸的比值计算缩放
         base_scale_x = face_width / reference_face_width
         base_scale_y = face_height / reference_face_height
+        
+        # 🔧 可选：使用像素坐标计算缩放
+        # reference_face_width_px = 430   # 正常距离下的脸宽像素
+        # reference_face_height_px = 500  # 正常距离下的脸高像素
+        # base_scale_x = face_width_px / reference_face_width_px
+        # base_scale_y = face_height_px / reference_face_height_px
         
         # 🔧 添加额外的缩小系数
         size_reduction = 0.8  # 整体缩小到80%
@@ -497,30 +536,37 @@ class FaceMaskRenderer:
         # 综合计算Yaw角度
         yaw_angle = np.arctan2(z_diff, face_width) * 2.0 + x_offset * 0.5  # 🔧 增强敏感度
         
-        # 4. 坐标系转换 - 将归一化坐标转换为模型坐标
-        screen_width = self.render_width
-        screen_height = self.render_height
+        # 4. 🔧 修改：使用像素坐标计算平移量，但考虑宽高比修正
+        # 计算面部中心的像素坐标
+        face_center_pixel_x = face_center_px[0]
+        face_center_pixel_y = face_center_px[1]
         
-        # 转换为屏幕像素坐标
-        screen_center_x = face_center_x * screen_width / self.x_scale_factor
-        screen_center_y = face_center_y * screen_height
+        # 🔧 关键修正：对X坐标应用宽高比修正，使其在正确的比例下计算偏移
+        # 将像素坐标重新归一化，然后应用x_scale_factor修正
+        normalized_center_x = face_center_pixel_x / self.render_width * self.x_scale_factor
+        normalized_center_y = face_center_pixel_y / self.render_height
         
-        # 转换为模型坐标系（以屏幕中心为原点）
-        model_x = (screen_center_x - screen_width/2) * 0.05   
-        model_y = -(screen_center_y - screen_height/2) * 0.05 + 1.5  # Y轴翻转 + 🔧 向上偏移1.5个单位
-        model_z = face_center_z * 30 + 2  # Z轴适当前移
+        # 转换回屏幕坐标进行平移计算
+        corrected_screen_x = normalized_center_x * self.render_width / self.x_scale_factor
+        corrected_screen_y = normalized_center_y * self.render_height
+        
+        # 与屏幕中心的差值 × 缩放系数
+        model_x = (corrected_screen_x - self.render_width * 0.5) * 0.05
+        model_y = -(corrected_screen_y - self.render_height * 0.5) * 0.05  # Y轴翻转 + 向上偏移1.5个单位 + 1.5
+        model_z = face_center_px[2] * 30 + 2  # Z轴适当前移
         
         # 调试信息
         if self.debug_mode and self.frame_count < 3:
             print(f"检测到的面部尺寸: 宽度={face_width:.4f}, 高度={face_height:.4f}")
+            print(f"检测到的面部像素尺寸: 宽度={face_width_px:.1f}px, 高度={face_height_px:.1f}px")
             print(f"参考面部尺寸: 宽度={reference_face_width:.2f}, 高度={reference_face_height:.2f}")
             print(f"基础缩放: X={base_scale_x:.3f}, Y={base_scale_y:.3f}")
             print(f"缩小系数: {size_reduction}")
             print(f"最终缩放因子: X={scale_x:.3f}, Y={scale_y:.3f}, Z={scale_z:.3f}")
             print(f"Yaw计算: Z差值={z_diff:.4f}, X偏移={x_offset:.4f}")
             print(f"旋转角度: Roll={np.degrees(roll_angle):.1f}°, Pitch={np.degrees(pitch_angle):.1f}°, Yaw={np.degrees(yaw_angle):.1f}°")
-            print(f"面部中心: ({face_center_x:.4f}, {face_center_y:.4f}, {face_center_z:.4f})")
-            print(f"屏幕坐标: ({screen_center_x:.1f}, {screen_center_y:.1f})")
+            print(f"归一化面部中心: ({face_center_x:.4f}, {face_center_y:.4f}, {face_center_z:.4f})")
+            print(f"像素面部中心: ({face_center_px[0]:.1f}, {face_center_px[1]:.1f})")
             print(f"模型坐标: ({model_x:.2f}, {model_y:.2f}, {model_z:.2f})")
         
         # 5. 构建变换矩阵：平移 + 旋转 + 缩放 (TRS变换)
@@ -611,13 +657,12 @@ class FaceMaskRenderer:
             for face_landmarks in detection_result.face_landmarks:
                 height, width, _ = image.shape
                 
-                # 获取原始landmarks坐标（不做任何变换）
-                coords = np.array([[lm.x, lm.y, lm.z] for lm in face_landmarks[:468]], dtype=np.float32)
+                # 🔧 修改：使用_lm_to_pixel方法获取像素坐标
+                coords = np.array([self._lm_to_pixel(lm, mirror=False) for lm in face_landmarks[:468]], dtype=np.float32)
                 
                 # 绘制landmarks点（绿色小圆点）
-                for x_norm, y_norm, _ in coords:
-                    x = int(x_norm * width)
-                    y = int(y_norm * height)
+                for i, (x, y, _) in enumerate(coords):
+                    x, y = int(x), int(y)
                     # 确保坐标在有效范围内
                     if 0 <= x < width and 0 <= y < height:
                         cv2.circle(image, (x, y), 1, (0, 255, 0), -1)  # 绿色点
@@ -627,10 +672,8 @@ class FaceMaskRenderer:
                     connections = mp_face_mesh.FACEMESH_TESSELATION
                     for (start_idx, end_idx) in connections:
                         if start_idx < len(coords) and end_idx < len(coords):
-                            sx = int(coords[start_idx, 0] * width)
-                            sy = int(coords[start_idx, 1] * height)
-                            ex = int(coords[end_idx, 0] * width)
-                            ey = int(coords[end_idx, 1] * height)
+                            sx, sy = int(coords[start_idx, 0]), int(coords[start_idx, 1])
+                            ex, ey = int(coords[end_idx, 0]), int(coords[end_idx, 1])
                             # 确保坐标在有效范围内
                             if (0 <= sx < width and 0 <= sy < height and 
                                 0 <= ex < width and 0 <= ey < height):
@@ -643,8 +686,7 @@ class FaceMaskRenderer:
                 
                 for idx, label in zip(key_indices, key_labels):
                     if idx < len(coords):
-                        x = int(coords[idx, 0] * width)
-                        y = int(coords[idx, 1] * height)
+                        x, y = int(coords[idx, 0]), int(coords[idx, 1])
                         if 0 <= x < width and 0 <= y < height:
                             cv2.circle(image, (x, y), 3, (0, 0, 255), -1)  # 红色大点
                             cv2.putText(image, f"{idx}", (x+5, y-5), 
