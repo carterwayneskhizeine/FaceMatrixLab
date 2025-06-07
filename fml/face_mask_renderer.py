@@ -78,6 +78,9 @@ class FaceMaskRenderer:
         self.debug_mode = True
         self.frame_count = 0
         
+        # 🆕 新增：平滑相机移动系数
+        self.camera_x_smoothing = 1.0  # 线性插值系数，值越小越平滑
+        
         # 🆕 新增：原始landmarks显示控制
         self.show_original_landmarks = True  # 显示原始landmarks点和线框
         
@@ -405,6 +408,40 @@ class FaceMaskRenderer:
             print(f"❌ 模型关键点提取失败: {e}")
             return False
     
+    def _follow_face_horizontally(self, model_offset_x):
+        """🆕 新增：让3D相机在水平方向上平滑跟随人脸中心"""
+        try:
+            # 获取视图控制器和相机参数
+            ctr = self.vis.get_view_control()
+            cam = ctr.convert_to_pinhole_camera_parameters()
+
+            # 关键：创建可写副本以修改
+            extrinsic = cam.extrinsic.copy()
+
+            # 目标：我们希望相机移动到 model_offset_x 的位置。
+            # 在Open3D的视图矩阵(extrinsic)中，平移分量是相机位置的负值。
+            # 所以，要让相机移动到 +X 的位置，视图矩阵的X平移需要是 -X。
+            # 修正：为了让模型在屏幕上看起来移动了 model_offset_x，相机需要反向移动。
+            # 即 Camera.x = -model_offset_x。
+            # 而 extrinsic[0,3] = -Camera.x，所以 extrinsic[0,3] = -(-model_offset_x) = model_offset_x。
+            target_cam_x = model_offset_x
+
+            # 使用线性插值(Lerp)实现平滑移动
+            current_cam_x = extrinsic[0, 3]
+            smoothed_cam_x = current_cam_x + self.camera_x_smoothing * (target_cam_x - current_cam_x)
+            
+            # 更新视图矩阵的X平移分量
+            extrinsic[0, 3] = smoothed_cam_x
+            
+            # 将修改后的参数应用回相机
+            cam.extrinsic = extrinsic
+            ctr.convert_from_pinhole_camera_parameters(cam, allow_arbitrary=True)
+
+        except Exception as e:
+            # 在主循环中，我们不希望因为这个错误中断渲染
+            if self.frame_count < 10: # 仅在初始几帧打印错误
+                print(f"⚠️ 水平跟随相机时出错: {e}")
+
     def update_face_model(self, detection_result):
         """🔑 关键：基于4个landmarks点的屏幕位置计算旋转缩放移动"""
         if not detection_result.face_landmarks or len(detection_result.face_landmarks) == 0:
@@ -418,9 +455,16 @@ class FaceMaskRenderer:
             print(f"⚠️ 关键点数量不足: {len(landmarks)}, 期望468个")
             return False
         
+        # 🆕 新增：获取所有468个点的像素坐标，用于计算精确的面部中心
+        all_landmarks_px = np.array([self._lm_to_pixel(lm, mirror=False) for lm in landmarks])
+        
+        # 提取X坐标并计算最左和最右点的平均值
+        x_coords = all_landmarks_px[:, 0]
+        face_center_x_precise = (np.min(x_coords) + np.max(x_coords)) / 2.0
+        
         # 🔑 提取4个特定关键点 (NormalizedLandmark类型)
         forehead = landmarks[self.forehead_index]      # 额头: 10
-        left_cheek = landmarks[self.left_cheek_index]  # 左脸颊: 234  
+        left_cheek = landmarks[self.left_cheek_index]  # 左脸颊: 234
         chin = landmarks[self.chin_index]              # 下巴: 152
         right_cheek = landmarks[self.right_cheek_index] # 右脸颊: 454
         
@@ -473,7 +517,7 @@ class FaceMaskRenderer:
         
         # 🔧 计算面部中心像素坐标
         face_center_px = np.array([
-            (left_px[0] + right_px[0]) * 0.5,          # X 取左右脸颊中点
+            (left_px[0] + right_px[0]) * 0.5,          # X 取左右脸颊中点 (用于旧计算)
             (forehead_px[1] + chin_px[1]) * 0.5,       # Y 取额头/下巴中点
             (forehead_px[2] + left_px[2] + chin_px[2] + right_px[2]) / 4  # Z取四点平均
         ], dtype=np.float32)
@@ -537,8 +581,8 @@ class FaceMaskRenderer:
         yaw_angle = np.arctan2(z_diff, face_width) * 2.0 + x_offset * 0.5  # 🔧 增强敏感度
         
         # 4. 🔧 修改：使用像素坐标计算平移量，但考虑宽高比修正
-        # 计算面部中心的像素坐标
-        face_center_pixel_x = face_center_px[0]
+        # 🆕 使用我们精确计算的面部中心X坐标
+        face_center_pixel_x = face_center_x_precise
         face_center_pixel_y = face_center_px[1]
         
         # 🔧 关键修正：对X坐标应用宽高比修正，使其在正确的比例下计算偏移
@@ -555,6 +599,9 @@ class FaceMaskRenderer:
         model_y = -(corrected_screen_y - self.render_height * 0.5) * 0.05  # Y轴翻转 + 向上偏移1.5个单位 + 1.5
         model_z = face_center_px[2] * 30 + 2  # Z轴适当前移
         
+        # 🆕 关键：将计算出的X偏移量用于移动相机，而不是模型
+        self._follow_face_horizontally(model_x)
+
         # 调试信息
         if self.debug_mode and self.frame_count < 3:
             print(f"检测到的面部尺寸: 宽度={face_width:.4f}, 高度={face_height:.4f}")
@@ -567,7 +614,8 @@ class FaceMaskRenderer:
             print(f"旋转角度: Roll={np.degrees(roll_angle):.1f}°, Pitch={np.degrees(pitch_angle):.1f}°, Yaw={np.degrees(yaw_angle):.1f}°")
             print(f"归一化面部中心: ({face_center_x:.4f}, {face_center_y:.4f}, {face_center_z:.4f})")
             print(f"像素面部中心: ({face_center_px[0]:.1f}, {face_center_px[1]:.1f})")
-            print(f"模型坐标: ({model_x:.2f}, {model_y:.2f}, {model_z:.2f})")
+            print(f"精确像素面部X中心: {face_center_x_precise:.1f}")
+            print(f"模型坐标: (X={model_x:.2f} -> to cam), (Y={model_y:.2f}), (Z={model_z:.2f})")
         
         # 5. 构建变换矩阵：平移 + 旋转 + 缩放 (TRS变换)
         
@@ -610,7 +658,8 @@ class FaceMaskRenderer:
         
         # 平移矩阵
         translation_matrix = np.eye(4)
-        translation_matrix[0, 3] = model_x
+        # 🆕 关键：不再对模型进行水平平移，将其交给相机处理
+        translation_matrix[0, 3] = 0.0 # model_x
         translation_matrix[1, 3] = model_y
         translation_matrix[2, 3] = model_z
         
@@ -621,6 +670,9 @@ class FaceMaskRenderer:
         self.current_transform_matrix = transform_matrix
         
         if self.debug_mode and self.frame_count < 3:
+            # 增加调试信息
+            print(f"精确的面部中心X像素坐标: {face_center_x_precise:.2f}")
+            print(f"计算出的模型X偏移(传递给相机): {model_x:.4f}")
             print(f"变换矩阵:\n{transform_matrix}")
         
         # 应用变换到模型顶点
