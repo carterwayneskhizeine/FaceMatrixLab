@@ -85,6 +85,11 @@ class FaceMaskRenderer:
         self.texture_mode = True             # 优先使用纹理贴图
         self.has_texture = False             # 是否成功加载纹理
         
+        # 🆕 新增：平滑滤波控制，解决旋转时模型忽大忽小的问题
+        self.prev_rotation_compensation = 1.0  # 上一帧的旋转补偿因子
+        self.compensation_smoothing = 0.15     # 平滑系数，越小越平滑（0.1-0.3）
+        self.min_rotation_threshold = 5.0     # 最小旋转角度阈值（度），避免小幅抖动
+        
         # 加载3D模型
         if not self.load_face_model():
             raise Exception("无法加载3D模型文件")
@@ -478,6 +483,71 @@ class FaceMaskRenderer:
             (forehead_px[2] + left_px[2] + chin_px[2] + right_px[2]) / 4  # Z取四点平均
         ], dtype=np.float32)
         
+        # 3. 计算旋转角度
+        # Roll角度：根据左右脸颊连线计算头部左右倾斜
+        cheek_vector = right_cheek_point - left_cheek_point
+        roll_angle = -np.arctan2(cheek_vector[1], cheek_vector[0])
+        
+        # Pitch角度：根据额头和下巴连线计算头部上下倾斜
+        vertical_vector = chin_point - forehead_point
+        pitch_angle = np.arctan2(vertical_vector[2], vertical_vector[1])
+        
+        # 🔧 修复Yaw角度：使用更准确的头部朝向计算
+        # 方法1：基于左右脸颊的Z深度差，但增强幅度
+        z_left = left_cheek_point[2]
+        z_right = right_cheek_point[2]
+        z_diff = z_right - z_left
+        
+        # 方法2：结合X坐标差异来增强Yaw检测
+        # 当头向左转时，右脸颊会比左脸颊更靠近屏幕中心
+        x_center = (left_cheek_point[0] + right_cheek_point[0]) / 2
+        x_offset = face_center_x - x_center  # 面部中心相对于脸颊中心的偏移
+        
+        # 综合计算Yaw角度
+        yaw_angle = np.arctan2(z_diff, face_width) * 2.0 + x_offset * 0.5  # 🔧 增强敏感度
+        
+        # 🆕 重新设计：计算平滑的旋转补偿因子，防止大角度旋转时模型缩小
+        # 转换角度为度数便于阈值判断
+        roll_deg = abs(np.degrees(roll_angle))
+        pitch_deg = abs(np.degrees(pitch_angle))
+        yaw_deg = abs(np.degrees(yaw_angle))
+        
+        # 🔧 改进：使用更平缓的补偿曲线
+        # 只有当旋转角度超过阈值时才开始补偿
+        if roll_deg > self.min_rotation_threshold:
+            # 使用更平缓的二次函数而不是sin函数
+            normalized_roll = min(roll_deg / 90.0, 1.0)  # 归一化到[0,1]
+            roll_scale_compensation = 1.0 + 0.8 * (normalized_roll ** 1.5)  # 平缓增长
+        else:
+            roll_scale_compensation = 1.0
+        
+        if pitch_deg > self.min_rotation_threshold:
+            normalized_pitch = min(pitch_deg / 90.0, 1.0)
+            pitch_scale_compensation = 1.0 + 0.4 * (normalized_pitch ** 1.5)
+        else:
+            pitch_scale_compensation = 1.0
+            
+        if yaw_deg > self.min_rotation_threshold:
+            normalized_yaw = min(yaw_deg / 90.0, 1.0)
+            yaw_scale_compensation = 1.0 + 0.4 * (normalized_yaw ** 1.5)
+        else:
+            yaw_scale_compensation = 1.0
+        
+        # 综合旋转补偿因子（取最大影响）
+        current_compensation = max(roll_scale_compensation, pitch_scale_compensation, yaw_scale_compensation)
+        
+        # 🔑 关键：应用平滑滤波，避免补偿因子突然变化
+        if self.frame_count == 0:
+            # 第一帧直接使用当前值
+            rotation_scale_compensation = current_compensation
+        else:
+            # 使用指数平滑滤波：new_value = α * current + (1-α) * previous
+            rotation_scale_compensation = (self.compensation_smoothing * current_compensation + 
+                                         (1 - self.compensation_smoothing) * self.prev_rotation_compensation)
+        
+        # 保存当前补偿因子供下一帧使用
+        self.prev_rotation_compensation = rotation_scale_compensation
+        
         # 2. 🔑 核心：基于landmarks点间距计算缩放
         # 从模型中获取对应4个点的距离作为参考
         model_face_width = np.linalg.norm(self.model_right_cheek - self.model_left_cheek)
@@ -504,6 +574,10 @@ class FaceMaskRenderer:
         # 🔧 添加额外的缩小系数
         size_reduction = 0.8  # 整体缩小到80%
         
+        # 🆕 新增：应用旋转补偿因子
+        base_scale_x *= rotation_scale_compensation
+        base_scale_y *= rotation_scale_compensation
+        
         scale_x = base_scale_x * size_reduction
         scale_y = base_scale_y * size_reduction
         scale_z = (scale_x + scale_y) / 2  # Z轴使用平均值
@@ -511,32 +585,9 @@ class FaceMaskRenderer:
         # 🔧 限制缩放范围，避免过度变形
         scale_x = np.clip(scale_x, 0.1, 2.0)  
         scale_y = np.clip(scale_y, 0.1, 2.0)  
-        scale_z = np.clip(scale_z, 0.1, 2.0)  
+        scale_z = np.clip(scale_z, 0.1, 2.0)
         
-        # 3. 计算旋转角度
-        # Roll角度：根据左右脸颊连线计算头部左右倾斜
-        cheek_vector = right_cheek_point - left_cheek_point
-        roll_angle = -np.arctan2(cheek_vector[1], cheek_vector[0])
-        
-        # Pitch角度：根据额头和下巴连线计算头部上下倾斜
-        vertical_vector = chin_point - forehead_point
-        pitch_angle = np.arctan2(vertical_vector[2], vertical_vector[1])
-        
-        # 🔧 修复Yaw角度：使用更准确的头部朝向计算
-        # 方法1：基于左右脸颊的Z深度差，但增强幅度
-        z_left = left_cheek_point[2]
-        z_right = right_cheek_point[2]
-        z_diff = z_right - z_left
-        
-        # 方法2：结合X坐标差异来增强Yaw检测
-        # 当头向左转时，右脸颊会比左脸颊更靠近屏幕中心
-        x_center = (left_cheek_point[0] + right_cheek_point[0]) / 2
-        x_offset = face_center_x - x_center  # 面部中心相对于脸颊中心的偏移
-        
-        # 综合计算Yaw角度
-        yaw_angle = np.arctan2(z_diff, face_width) * 2.0 + x_offset * 0.5  # 🔧 增强敏感度
-        
-        # 4. 🔧 修改：使用像素坐标计算平移量，但考虑宽高比修正
+        # 4. 计算平移量
         # 计算面部中心的像素坐标
         face_center_pixel_x = face_center_px[0]
         face_center_pixel_y = face_center_px[1]
@@ -562,9 +613,12 @@ class FaceMaskRenderer:
             print(f"参考面部尺寸: 宽度={reference_face_width:.2f}, 高度={reference_face_height:.2f}")
             print(f"基础缩放: X={base_scale_x:.3f}, Y={base_scale_y:.3f}")
             print(f"缩小系数: {size_reduction}")
+            print(f"旋转补偿: Roll={roll_scale_compensation:.2f}, Pitch={pitch_scale_compensation:.2f}, Yaw={yaw_scale_compensation:.2f}")
+            print(f"当前补偿因子: {current_compensation:.2f}")
+            print(f"平滑后补偿因子: {rotation_scale_compensation:.2f}")
             print(f"最终缩放因子: X={scale_x:.3f}, Y={scale_y:.3f}, Z={scale_z:.3f}")
             print(f"Yaw计算: Z差值={z_diff:.4f}, X偏移={x_offset:.4f}")
-            print(f"旋转角度: Roll={np.degrees(roll_angle):.1f}°, Pitch={np.degrees(pitch_angle):.1f}°, Yaw={np.degrees(yaw_angle):.1f}°")
+            print(f"旋转角度: Roll={roll_deg:.1f}°, Pitch={pitch_deg:.1f}°, Yaw={yaw_deg:.1f}°")
             print(f"归一化面部中心: ({face_center_x:.4f}, {face_center_y:.4f}, {face_center_z:.4f})")
             print(f"像素面部中心: ({face_center_px[0]:.1f}, {face_center_px[1]:.1f})")
             print(f"模型坐标: ({model_x:.2f}, {model_y:.2f}, {model_z:.2f})")
