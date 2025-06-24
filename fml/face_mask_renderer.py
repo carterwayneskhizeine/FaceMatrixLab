@@ -932,7 +932,7 @@ class FaceMaskRenderer:
         print("  1-6键: 直接选择面具颜色")
         print("  T键: 切换纹理贴图/统一颜色模式")
         print("  L键: 切换原始landmarks显示")
-        print("  F键: 切换相机跟随功能")
+        print("  F键: 切换相机跟随功能 (已修复：3D模型将正确跟随人脸)")
         print("  E键: 导出当前实时3D模型为OBJ文件")
         print("  Q键: 退出程序")
         print("=" * 60)
@@ -1158,7 +1158,7 @@ class FaceMaskRenderer:
     
     def update_camera_position(self, face_center_data):
         """
-        🆕 新增：更新3D相机位置以跟随人脸水平中心
+        🆕 修复：更新3D相机位置以跟随人脸水平中心
         """
         if not face_center_data or not self.enable_camera_following:
             return
@@ -1168,12 +1168,13 @@ class FaceMaskRenderer:
         normalized_offset = face_center_data['normalized_offset']
         
         # 设置相机移动的敏感度和限制
-        camera_sensitivity = 2.0  # 相机移动敏感度
-        max_camera_offset = 5.0   # 最大相机偏移量
+        camera_sensitivity = 1.5  # 🔧 降低敏感度
+        max_camera_offset = 3.0   # 🔧 降低最大偏移量
         
-        # 计算目标偏移量
+        # 🔧 关键修复：相机应该向相反方向移动来跟随人脸
+        # 当人脸向左移动时，相机向右移动来保持对齐
         self.target_camera_offset_x = np.clip(
-            normalized_offset * camera_sensitivity, 
+            -normalized_offset * camera_sensitivity,  # 🔧 添加负号，相机反向移动
             -max_camera_offset, 
             max_camera_offset
         )
@@ -1199,9 +1200,10 @@ class FaceMaskRenderer:
         ctr.convert_from_pinhole_camera_parameters(camera_params)
         
         if self.debug_mode and self.frame_count < 5:
-            print(f"📹 相机位置更新:")
-            print(f"   目标偏移: {self.target_camera_offset_x:.3f}")
-            print(f"   当前偏移: {self.current_camera_offset_x:.3f}")
+            print(f"📹 相机位置更新 (修复版):")
+            print(f"   人脸偏移: {normalized_offset:.3f}")
+            print(f"   目标相机偏移: {self.target_camera_offset_x:.3f}")
+            print(f"   当前相机偏移: {self.current_camera_offset_x:.3f}")
             print(f"   敏感度: {camera_sensitivity}")
 
 
