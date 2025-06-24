@@ -62,7 +62,7 @@ FaceMatrixLab/
 
 ### 环境要求
 
-- Python 3.8+
+- Python 3.8+ (我使用的是3.11)
 - Windows 10/11（推荐）
 - 摄像头设备
 - 4GB+ RAM
@@ -85,16 +85,10 @@ numpy>=1.21.0
 
 1. **启动 3D 面具渲染器**：
 ```bash
-cd fml
-python face_mask_renderer.py
+python fml/face_mask_renderer.py
 ```
 
-2. **启动人脸变形系统**：
-```bash
-python face_landmarker_camera.py
-```
-
-3. **相机校准**（可选）：
+2. **相机校准**（可选）：
 ```bash
 cd Camera-Calibration
 python calibration_GUI.py
@@ -114,18 +108,6 @@ python calibration_GUI.py
 | **F** | 切换相机跟随功能 |
 | **E** | 导出当前实时 3D 模型 |
 | **Q** | 退出程序 |
-
-### 人脸变形系统控制键
-
-| 按键 | 功能 |
-|------|------|
-| **G** | 切换 Lambert 材质/原始纹理 |
-| **W** | 切换线框显示 |
-| **O** | 切换面部专用模式 |
-| **T** | 切换透视投影/弱透视 |
-| **1/2** | 调整透视强度 |
-| **5/6** | 调整基础深度 |
-| **7/8** | 调整深度变化范围 |
 
 ## 📊 技术细节
 
