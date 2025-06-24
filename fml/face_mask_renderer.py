@@ -125,56 +125,56 @@ class FaceMaskRenderer:
         else:
             print(f"📁 数据保存目录已存在: {self.save_directory}")
     
-    def save_position_data(self, landmarks, camera_position):
-        """保存landmarks位置和相机位置数据"""
-        try:
-            # 准备数据
-            data = {
-                'timestamp': datetime.now().isoformat(),
-                'frame_count': self.save_frame_counter,
-                'screen_resolution': {
-                    'width': self.render_width,
-                    'height': self.render_height
-                },
-                'original_landmarks': [],
-                'pixel_landmarks': [],
-                'camera_position': camera_position,
-                'camera_settings': {
-                    'camera_following_enabled': self.enable_camera_following,
-                    'camera_offset_x': self.current_camera_offset_x,
-                    'camera_smoothing': self.camera_follow_smoothing
-                }
-            }
-            
-            # 保存原始landmarks（归一化坐标）和像素坐标
-            for i, lm in enumerate(landmarks):
-                # 原始归一化坐标 (0-1范围) - 添加xyz前缀
-                original_coord = {
-                    f'x_{i:03d}': float(lm.x),
-                    f'y_{i:03d}': float(lm.y), 
-                    f'z_{i:03d}': float(lm.z)
-                }
-                data['original_landmarks'].append(original_coord)
-                
-                # 转换为像素坐标 (0-1279, 0-719范围) - 添加xyz前缀
-                pixel_coord = self._lm_to_pixel(lm, mirror=False)
-                pixel_data = {
-                    f'x_{i:03d}': float(pixel_coord[0]),
-                    f'y_{i:03d}': float(pixel_coord[1]),
-                    f'z_{i:03d}': float(pixel_coord[2])
-                }
-                data['pixel_landmarks'].append(pixel_data)
-            
-            # 保存到文件 (每30帧保存一个独立文件)
-            filename = f"landmarks_frame_{self.save_frame_counter:06d}.json"
-            save_path = os.path.join(self.save_directory, filename)
-            with open(save_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            
-            print(f"💾 已保存位置数据 (第{self.save_frame_counter}帧): {filename}")
-            
-        except Exception as e:
-            print(f"❌ 保存位置数据失败: {e}")
+    # def save_position_data(self, landmarks, camera_position):
+    #     """保存landmarks位置和相机位置数据"""
+    #     try:
+    #         # 准备数据
+    #         data = {
+    #             'timestamp': datetime.now().isoformat(),
+    #             'frame_count': self.save_frame_counter,
+    #             'screen_resolution': {
+    #                 'width': self.render_width,
+    #                 'height': self.render_height
+    #             },
+    #             'original_landmarks': [],
+    #             'pixel_landmarks': [],
+    #             'camera_position': camera_position,
+    #             'camera_settings': {
+    #                 'camera_following_enabled': self.enable_camera_following,
+    #                 'camera_offset_x': self.current_camera_offset_x,
+    #                 'camera_smoothing': self.camera_follow_smoothing
+    #             }
+    #         }
+    #         
+    #         # 保存原始landmarks（归一化坐标）和像素坐标
+    #         for i, lm in enumerate(landmarks):
+    #             # 原始归一化坐标 (0-1范围) - 添加xyz前缀
+    #             original_coord = {
+    #                 f'x_{i:03d}': float(lm.x),
+    #                 f'y_{i:03d}': float(lm.y), 
+    #                 f'z_{i:03d}': float(lm.z)
+    #             }
+    #             data['original_landmarks'].append(original_coord)
+    #             
+    #             # 转换为像素坐标 (0-1279, 0-719范围) - 添加xyz前缀
+    #             pixel_coord = self._lm_to_pixel(lm, mirror=False)
+    #             pixel_data = {
+    #                 f'x_{i:03d}': float(pixel_coord[0]),
+    #                 f'y_{i:03d}': float(pixel_coord[1]),
+    #                 f'z_{i:03d}': float(pixel_coord[2])
+    #             }
+    #             data['pixel_landmarks'].append(pixel_data)
+    #         
+    #         # 保存到文件 (每30帧保存一个独立文件)
+    #         filename = f"landmarks_frame_{self.save_frame_counter:06d}.json"
+    #         save_path = os.path.join(self.save_directory, filename)
+    #         with open(save_path, 'w', encoding='utf-8') as f:
+    #             json.dump(data, f, indent=2, ensure_ascii=False)
+    #         
+    #         print(f"💾 已保存位置数据 (第{self.save_frame_counter}帧): {filename}")
+    #         
+    #     except Exception as e:
+    #         print(f"❌ 保存位置数据失败: {e}")
     
     def get_camera_position(self):
         """获取虚拟摄像机的当前位置参数"""
@@ -775,12 +775,12 @@ class FaceMaskRenderer:
         self.face_mesh.vertex_normals = o3d.utility.Vector3dVector(transformed_normals)
         
         # 🆕 新增：每30帧保存一次位置数据
-        self.save_frame_counter += 1
-        if self.save_frame_counter % self.save_interval == 0:
-            # 获取虚拟摄像机位置
-            camera_position = self.get_camera_position()
-            # 保存数据
-            self.save_position_data(landmarks, camera_position)
+        # self.save_frame_counter += 1
+        # if self.save_frame_counter % self.save_interval == 0:
+        #     # 获取虚拟摄像机位置
+        #     camera_position = self.get_camera_position()
+        #     # 保存数据
+        #     self.save_position_data(landmarks, camera_position)
         
         self.frame_count += 1
         if self.frame_count >= 3:
