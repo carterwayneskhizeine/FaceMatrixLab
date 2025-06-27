@@ -1,3 +1,8 @@
+**启动 3D 面具渲染器 python 版本为3.11**：
+```bash
+python fml/face_mask_renderer.py
+```
+
 # FaceMatrixLab
 
 一个基于 MediaPipe 和 Open3D 的实时人脸跟踪与 3D 面具渲染系统，支持高精度人脸建模、表情驱动和 AR 效果。
@@ -71,14 +76,6 @@ FaceMatrixLab/
 
 ```bash
 pip install -r requirements.txt
-```
-
-主要依赖包：
-```
-mediapipe>=0.10.0
-open3d>=0.17.0
-opencv-python>=4.8.0
-numpy>=1.21.0
 ```
 
 ### 基本使用
